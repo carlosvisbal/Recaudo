@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.coverage
+htmlcov/
+*.sqlite3
+
+# Node
+node_modules/
+frontend/dist/
+frontend/dev-dist/
+
+# Env and secrets
+.env
+.env.local
+*.pem
+
+# Media and generated files
+backend/media/
+backend/staticfiles/
+backend/static/frontend/
+
+# OS / IDE
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Docker
+docker-data/
+
+# Logs
+*.log

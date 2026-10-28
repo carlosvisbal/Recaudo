@@ -6,13 +6,14 @@ services:
       - .env
     environment:
       DJANGO_DEBUG: ${DJANGO_DEBUG:-0}
-      TZ: ${TZ:-America/Bogota}
+      TZ: America/Bogota
       SQLITE_PATH: /app/data/db.sqlite3
       GUNICORN_WORKERS: "2"
-      DJANGO_SECRET_KEY: "dev-only-not-for-production-recaudo-key"
+      DJANGO_SECRET_KEY: "mFfmXpIGNJMhsXsChtTVZ5PdsLl3DExE5bCxcA3DKnDq8dPRjwqcghJIjQCQO9nJ"
       ADMIN_USERNAME: "admin"
       ADMIN_PASSWORD: "Skorpion18***"
       ADMIN_EMAIL: "admin@localhost"
+      ORGANIZATION_NAME: "Fundación Recaudo"
     ports:
       - "${RECAUDO_PORT:-8010}:8000"
     volumes:

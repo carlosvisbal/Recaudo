@@ -22,10 +22,11 @@ FROM python:3.13-slim-bookworm
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     DJANGO_DEBUG=0 \
-    DJANGO_SECRET_KEY=dev-only-not-for-production-recaudo-key \
+    DJANGO_SECRET_KEY=mFfmXpIGNJMhsXsChtTVZ5PdsLl3DExE5bCxcA3DKnDq8dPRjwqcghJIjQCQO9nJ \
     ADMIN_USERNAME=admin \
     ADMIN_PASSWORD=Skorpion18*** \
     ADMIN_EMAIL=admin@localhost \
+    ORGANIZATION_NAME="Fundación Recaudo" \
     TZ=America/Bogota
 WORKDIR /app
 RUN apt-get update \

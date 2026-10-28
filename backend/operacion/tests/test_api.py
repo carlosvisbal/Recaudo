@@ -4,7 +4,10 @@ from decimal import Decimal
 import pytest
 from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
+from rest_framework.exceptions import ValidationError
 from rest_framework.test import APIClient
+
+from operacion.files import validate_soporte
 
 from operacion.models import (
     Actividad,
@@ -215,6 +218,14 @@ def test_efectivo_no_acepta_soporte(api, catalogo):
     )
     assert response.status_code == 400
     assert b"efectivo" in response.content.lower()
+
+
+def test_rechaza_soporte_mayor_a_5mb():
+    png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 20
+    grande = SimpleUploadedFile("grande.png", png, content_type="image/png")
+    grande.size = 5 * 1024 * 1024 + 1
+    with pytest.raises(ValidationError, match="5 MB"):
+        validate_soporte(grande)
 
 
 def test_rechaza_soporte_no_permitido(api, catalogo):

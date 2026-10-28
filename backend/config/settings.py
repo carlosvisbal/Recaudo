@@ -242,7 +242,7 @@ ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "admin")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "Skorpion18***")
 ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "admin@localhost")
 
-MAX_SOPORTE_BYTES = 8 * 1024 * 1024
+MAX_SOPORTE_BYTES = 5 * 1024 * 1024
 MAX_SOPORTES_POR_RECAUDO = 8
 
 WHITENOISE_ROOT = BASE_DIR / "static" / "frontend" if (BASE_DIR / "static" / "frontend" / "index.html").exists() else None

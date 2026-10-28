@@ -92,4 +92,4 @@ No se publican enlaces permanentes a recibos ni soportes.
 - Los recaudos confirmados no se borran. La anulación pide motivo, conserva el PDF y deja auditoría.
 - El número de recibo se asigna con bloqueo de fila (`SELECT FOR UPDATE`) para operaciones simultáneas.
 - Los importes se guardan en `Decimal` (no en punto flotante).
-- Solo se aceptan soportes PDF, JPEG, PNG o WebP, de hasta 8 MB.
+- Solo se aceptan soportes PDF, JPEG, PNG o WebP, de hasta 5 MB.

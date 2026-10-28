@@ -4,6 +4,8 @@ import { api, ApiError, cop, parsePage, type Actividad, type Familia, type Padri
 import { FilterSelect } from "../components/FilterSelect";
 import { Pager } from "../components/Pager";
 
+const MAX_SOPORTE_BYTES = 5 * 1024 * 1024;
+
 function today() {
   return new Date().toISOString().slice(0, 10);
 }
@@ -231,6 +233,11 @@ export function RecaudoNuevo() {
     }
     if (medio === "transferencia" && files.length === 0 && !soportesExistentes) {
       setError("Adjunte el comprobante de la transferencia (archivo PDF o imagen, no una foto de la cámara).");
+      return false;
+    }
+    const pesado = files.find((file) => file.size > MAX_SOPORTE_BYTES);
+    if (pesado) {
+      setError(`"${pesado.name}" pesa más de 5 MB. Use un archivo más liviano.`);
       return false;
     }
     return true;
@@ -631,16 +638,27 @@ export function RecaudoNuevo() {
                   Comprobante de la transferencia
                 </div>
                 <p className="muted" style={{ margin: "0 0 8px" }}>
-                  Adjunte el PDF o el archivo descargado del banco. En el celular elija Archivos o Documentos; no se
-                  abre la cámara.
+                  Adjunte el PDF o el archivo descargado del banco, de menos de 5 MB. En el celular elija Archivos o
+                  Documentos; no se abre la cámara.
                 </p>
                 <label className="file-input">
-                  <span className="muted">Toque para adjuntar el comprobante (PDF, JPG, PNG o WebP)</span>
+                  <span className="muted">Toque para adjuntar el comprobante (PDF, JPG, PNG o WebP, máx. 5 MB)</span>
                   <input
                     type="file"
                     accept="application/pdf,.pdf,image/jpeg,.jpg,.jpeg,image/png,.png,image/webp,.webp"
                     multiple
-                    onChange={(e) => setFiles(Array.from(e.target.files || []))}
+                    onChange={(e) => {
+                      const next = Array.from(e.target.files || []);
+                      const pesado = next.find((file) => file.size > MAX_SOPORTE_BYTES);
+                      if (pesado) {
+                        setError(`"${pesado.name}" pesa más de 5 MB. Use un archivo más liviano.`);
+                        e.target.value = "";
+                        setFiles([]);
+                        return;
+                      }
+                      setError("");
+                      setFiles(next);
+                    }}
                   />
                   {files.length ? (
                     <strong>

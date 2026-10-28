@@ -24,7 +24,7 @@ def validate_soporte(uploaded) -> tuple[str, str, int]:
     if size <= 0:
         raise ValidationError("El archivo de soporte está vacío.")
     if size > settings.MAX_SOPORTE_BYTES:
-        raise ValidationError("Cada soporte puede pesar como máximo 8 MB.")
+        raise ValidationError("Cada soporte puede pesar como máximo 5 MB.")
     position = uploaded.tell() if hasattr(uploaded, "tell") else 0
     header = uploaded.read(16)
     if hasattr(uploaded, "seek"):

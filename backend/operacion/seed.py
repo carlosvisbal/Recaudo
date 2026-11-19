@@ -5,7 +5,7 @@ from .models import Familia, Organizacion, Padrino, ReciboSequence, Semilla
 
 CLAVE_CATALOGO = "catalogo_padrinos_familias"
 ADMIN_INICIAL_USERNAME = "admin"
-ADMIN_INICIAL_PASSWORD = "Skorpion18***"
+ADMIN_INICIAL_PASSWORD = "Carlos*2021*"
 ADMIN_INICIAL_EMAIL = "admin@localhost"
 
 # Padrinos y familias actuales (una sola carga al crear las tablas).

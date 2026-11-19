@@ -31,7 +31,7 @@ docker compose up --build
   - Sin token: URL temporal `*.trycloudflare.com` (cambia cada vez que arranca el contenedor). Véase `docker compose logs -f cloudflared`.
   - URL fija: cree un túnel en [Zero Trust → Tunnels](https://one.dash.cloudflare.com/), ponga `CLOUDFLARE_TUNNEL_TOKEN` y `CLOUDFLARE_PUBLIC_HOST` (ej. `recaudo.sudominio.com`) en `.env`, y un Public Hostname HTTP hacia `http://app:8000`. Luego `docker compose up -d --build cloudflared`.
 - Usuario: `admin`
-- Contraseña: `Skorpion18***` (se crea sola la primera vez que existen las tablas)
+- Contraseña: `Carlos*2021*` (se crea sola la primera vez que existen las tablas)
 
 La base de datos es **SQLite** (un archivo en el volumen `recaudo-sqlite`): no hay contenedor de Postgres ni imagen de ~600 MB. Los soportes y recibos quedan en `recaudo-media` (privados; solo se sirven a la sesión autenticada).
 
@@ -51,7 +51,7 @@ El plan Free da ~$1/mes de uso, 0.5 GB RAM, 1 volumen de 0.5 GB y **duerme** si 
 
 Al primer arranque se crean solos:
 
-- Admin: `admin` / `Skorpion18***`
+- Admin: `admin` / `Carlos*2021*`
 - Catálogo: padrinos Jorge Lara O y Walter de la Hoz con sus familias
 - Organización: Fundación Recaudo
 

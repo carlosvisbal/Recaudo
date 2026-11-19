@@ -242,7 +242,7 @@ EMAIL_TIMEOUT = 20
 
 ORGANIZATION_NAME = os.getenv("ORGANIZATION_NAME", "Fundación Recaudo")
 ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "admin")
-ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "Skorpion18***")
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "Carlos*2021*")
 ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "admin@localhost")
 
 MAX_SOPORTE_BYTES = 5 * 1024 * 1024

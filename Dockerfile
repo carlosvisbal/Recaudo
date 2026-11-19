@@ -27,7 +27,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     ADMIN_PASSWORD=Skorpion18*** \
     ADMIN_EMAIL=admin@localhost \
     ORGANIZATION_NAME="Fundación Recaudo" \
-    TZ=America/Bogota
+    TZ=America/Bogota \
+    GUNICORN_WORKERS=1
 WORKDIR /app
 RUN apt-get update \
     && apt-get install -y --no-install-recommends libpq5 \

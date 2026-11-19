@@ -14,12 +14,20 @@ function readCookie(name: string): string {
 }
 
 async function ensureCsrf(): Promise<string> {
-  let token = readCookie("csrftoken");
-  if (!token) {
-    await fetch("/api/auth/csrf/", { credentials: "include" });
-    token = readCookie("csrftoken");
-  }
-  return token;
+  const response = await fetch("/api/auth/csrf/", { credentials: "include" });
+  const data = (await response.json().catch(() => null)) as { csrfToken?: string } | null;
+  return data?.csrfToken || readCookie("csrftoken");
+}
+
+function esFalloCsrf(body: unknown): boolean {
+  const detail = body && typeof body === "object" ? String((body as { detail?: string }).detail || "") : "";
+  return /csrf/i.test(detail);
+}
+
+function esSesionInvalida(status: number, body: unknown): boolean {
+  if (status === 401) return true;
+  const detail = body && typeof body === "object" ? String((body as { detail?: string }).detail || "") : "";
+  return status === 403 && /autentic|credentials|not authenticated|sesión/i.test(detail) && !esFalloCsrf(body);
 }
 
 function flattenError(body: unknown): string {
@@ -38,29 +46,32 @@ function flattenError(body: unknown): string {
   return "No se pudo completar la operación.";
 }
 
-export async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
+export async function api<T>(path: string, options: RequestInit = {}, _retried = false): Promise<T> {
   const headers = new Headers(options.headers || {});
   const isForm = options.body instanceof FormData;
   if (!isForm && !headers.has("Content-Type") && options.body) {
     headers.set("Content-Type", "application/json");
   }
-  if (options.method && options.method !== "GET") {
+  const method = (options.method || "GET").toUpperCase();
+  if (method !== "GET" && method !== "HEAD" && method !== "OPTIONS") {
     headers.set("X-CSRFToken", await ensureCsrf());
   }
   const response = await fetch(path, { ...options, headers, credentials: "include" });
-  if (response.status === 401 || response.status === 403) {
-    if (!path.includes("/auth/login") && !path.includes("/auth/csrf")) {
-      const errBody = await response.json().catch(() => null);
-      if (response.status === 403 && errBody && (errBody as { detail?: string }).detail) {
-        throw new ApiError(flattenError(errBody), response.status, errBody);
-      }
-      if (response.status === 401 || (errBody && String((errBody as { detail?: string }).detail || "").includes("autentic"))) {
-        throw new ApiError("Sesión expirada", response.status, errBody);
-      }
-    }
-  }
   if (!response.ok) {
     const body = await response.json().catch(() => null);
+    if (
+      !_retried &&
+      response.status === 403 &&
+      esFalloCsrf(body) &&
+      method !== "GET" &&
+      method !== "HEAD" &&
+      !path.includes("/auth/csrf")
+    ) {
+      return api<T>(path, options, true);
+    }
+    if (!path.includes("/auth/login") && !path.includes("/auth/csrf") && esSesionInvalida(response.status, body)) {
+      throw new ApiError("Sesión expirada. Vuelva a iniciar sesión.", response.status, body);
+    }
     throw new ApiError(flattenError(body), response.status, body);
   }
   if (response.status === 204) return undefined as T;

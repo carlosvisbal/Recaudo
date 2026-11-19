@@ -4,9 +4,12 @@ from django.contrib.auth import get_user_model
 from .models import Familia, Organizacion, Padrino, ReciboSequence, Semilla
 
 CLAVE_CATALOGO = "catalogo_padrinos_familias"
-ADMIN_INICIAL_USERNAME = "carlosvisbal"
+ADMIN_INICIAL_USERNAME = "admin"
 ADMIN_INICIAL_PASSWORD = "Skorpion18***"
-ADMIN_INICIAL_EMAIL = "carlosvisbal@gmail.com"
+ADMIN_INICIAL_EMAIL = "admin@localhost"
+USUARIO_PRUEBA_USERNAME = "test"
+USUARIO_PRUEBA_PASSWORD = "prueba123"
+USUARIO_PRUEBA_EMAIL = "test@localhost"
 
 # Padrinos y familias actuales (una sola carga al crear las tablas).
 CATALOGO_INICIAL = (
@@ -36,24 +39,37 @@ CATALOGO_INICIAL = (
 )
 
 
+def _asegurar_usuario(*, username: str, password: str, email: str, staff: bool = True) -> bool:
+    User = get_user_model()
+    if User.objects.filter(username=username).exists():
+        return False
+    user = User.objects.create_user(username=username, password=password, email=email)
+    user.is_staff = staff
+    user.is_superuser = staff
+    user.is_active = True
+    user.save(update_fields=["is_staff", "is_superuser", "is_active"])
+    return True
+
+
 def asegurar_admin_inicial():
     """Crea el administrador una sola vez, cuando aún no existe."""
     username = settings.ADMIN_USERNAME or ADMIN_INICIAL_USERNAME
     password = settings.ADMIN_PASSWORD or ADMIN_INICIAL_PASSWORD
     email = settings.ADMIN_EMAIL or ADMIN_INICIAL_EMAIL
-    User = get_user_model()
-    if User.objects.filter(username=username).exists():
-        Organizacion.actual()
-        ReciboSequence.objects.get_or_create(pk=1, defaults={"ultimo_numero": 0})
-        return False
-    User.objects.create_superuser(
-        username=username,
-        password=password,
-        email=email,
-    )
+    creado = _asegurar_usuario(username=username, password=password, email=email, staff=True)
     Organizacion.actual()
     ReciboSequence.objects.get_or_create(pk=1, defaults={"ultimo_numero": 0})
-    return True
+    return creado
+
+
+def asegurar_usuario_prueba():
+    """Crea el usuario de prueba una sola vez (test / prueba123)."""
+    return _asegurar_usuario(
+        username=USUARIO_PRUEBA_USERNAME,
+        password=USUARIO_PRUEBA_PASSWORD,
+        email=USUARIO_PRUEBA_EMAIL,
+        staff=True,
+    )
 
 
 def asegurar_catalogo_inicial():

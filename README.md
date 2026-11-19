@@ -37,19 +37,26 @@ La base de datos es **SQLite** (un archivo en el volumen `recaudo-sqlite`): no h
 
 Para instalarla como PWA en el teléfono, sirva la app por **HTTPS** (en localhost el navegador de escritorio sí permite instalar). En iPhone: Safari → Compartir → Agregar a pantalla de inicio.
 
-## Despliegue en Railway
+## Despliegue en Railway (plan Free)
 
-No hace falta dominio propio. Use el hostname que Railway asigna al generar dominio (`algo.up.railway.app`). La app ya acepta `*.up.railway.app` y CSRF en HTTPS.
+No hace falta dominio propio. Use el hostname que Railway asigna (`algo.up.railway.app`). La app ya acepta `*.up.railway.app` y CSRF en HTTPS.
 
-1. En [Railway](https://railway.app) cree un proyecto y despliegue este repositorio (detecta el `Dockerfile`).
-2. En el servicio: **Settings → Networking → Generate Domain**. Esa URL es la pública.
-3. En **Settings → Healthcheck Path** ponga `/salud/`.
-4. Agregue un **Volume** montado en `/data` (SQLite y archivos de recibos/soportes). Sin volumen, los datos se pierden al redesplegar.
-5. No hace falta pegar claves en el panel: van quemadas en el `Dockerfile` (`admin` / `Skorpion18***`).
+El plan Free da ~$1/mes de uso, 0.5 GB RAM, 1 volumen de 0.5 GB y **duerme** si no hay tráfico (la primera visita puede tardar unos segundos). Si se queda corto, suba a Hobby ($5/mes).
 
-No configure `DJANGO_ALLOWED_HOSTS` ni un dominio custom. Railway inyecta `PORT` y `RAILWAY_PUBLIC_DOMAIN`; el contenedor escucha en `$PORT`.
+1. En [Railway](https://railway.app) cree un proyecto y despliegue este repo de GitHub (`carlosvisbal/Recaudo`, rama `main`). Detecta el `Dockerfile`.
+2. **Settings → Networking → Generate Domain**.
+3. Healthcheck: `/salud/` (también en `railway.toml`).
+4. **Volume** montado en `/data` (SQLite + PDFs/soportes). Sin volumen se pierden los datos al redesplegar. En Free el tope es 0.5 GB.
+5. No agregue plugin de Postgres. No hace falta pegar variables: claves y seed van en la imagen.
 
-Usuario inicial: `admin` / `Skorpion18***`.
+Al primer arranque se crean solos:
+
+- Admin: `admin` / `Skorpion18***`
+- Prueba: `test` / `prueba123`
+- Catálogo: padrinos Jorge Lara O y Walter de la Hoz con sus familias
+- Organización: Fundación Recaudo
+
+No configure `DJANGO_ALLOWED_HOSTS` ni un dominio custom. Railway inyecta `PORT` y `RAILWAY_PUBLIC_DOMAIN`.
 
 ## Desarrollo local
 

@@ -23,4 +23,4 @@ fi
 
 python manage.py collectstatic --noinput
 PORT="${PORT:-8000}"
-exec gunicorn config.wsgi:application --bind "0.0.0.0:${PORT}" --workers ${GUNICORN_WORKERS:-2} --threads 1 --timeout 90
+exec gunicorn config.wsgi:application --bind "0.0.0.0:${PORT}" --workers ${GUNICORN_WORKERS:-1} --threads 1 --timeout 90

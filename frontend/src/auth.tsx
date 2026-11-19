@@ -24,15 +24,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const refresh = async () => {
     try {
-      await api("/api/auth/csrf/");
       const me = await api<{ usuario: Usuario; organizacion: Organizacion; smtp_configurado: boolean }>(
         "/api/auth/me/"
       );
       setUsuario(me.usuario);
       setOrganizacion(me.organizacion);
       setSmtp(me.smtp_configurado);
-    } catch {
-      setUsuario(null);
+    } catch (error) {
+      if (error instanceof ApiError && (error.status === 401 || error.status === 403)) {
+        setUsuario(null);
+        setOrganizacion(null);
+      }
     } finally {
       setLoading(false);
     }
@@ -50,13 +52,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       smtp,
       refresh,
       login: async (username, password) => {
-        await api("/api/auth/csrf/");
         const data = await api<{ usuario: Usuario }>("/api/auth/login/", {
           method: "POST",
           body: JSON.stringify({ username, password }),
         });
         setUsuario(data.usuario);
-        await refresh();
+        try {
+          const me = await api<{ usuario: Usuario; organizacion: Organizacion; smtp_configurado: boolean }>(
+            "/api/auth/me/"
+          );
+          setUsuario(me.usuario);
+          setOrganizacion(me.organizacion);
+          setSmtp(me.smtp_configurado);
+        } catch {
+          // La sesión ya quedó creada en el login; no borrar el usuario si /me falla un instante.
+        }
       },
       logout: async () => {
         try {
@@ -65,6 +75,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           if (!(error instanceof ApiError)) throw error;
         }
         setUsuario(null);
+        setOrganizacion(null);
       },
     }),
     [loading, usuario, organizacion, smtp]

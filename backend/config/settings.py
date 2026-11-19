@@ -203,8 +203,11 @@ SESSION_COOKIE_SAMESITE = "Lax"
 CSRF_COOKIE_SAMESITE = "Lax"
 CSRF_COOKIE_HTTPONLY = False
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
-SESSION_COOKIE_SECURE = not DEBUG
-CSRF_COOKIE_SECURE = not DEBUG
+# En Railway (HTTPS) las cookies van Secure. En Docker local se dejan abiertas para
+# http://localhost:8010 y el túnel https://*.trycloudflare.com a la vez.
+SESSION_COOKIE_SECURE = env_bool("DJANGO_COOKIE_SECURE", default=_en_railway())
+CSRF_COOKIE_SECURE = SESSION_COOKIE_SECURE
+CSRF_TRUSTED_ORIGINS = list(dict.fromkeys(CSRF_TRUSTED_ORIGINS))
 
 if DEBUG:
     CORS_ALLOWED_ORIGINS = [
@@ -237,7 +240,7 @@ EMAIL_USE_SSL = env_bool("EMAIL_USE_SSL", default=False)
 DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", EMAIL_HOST_USER or "noreply@localhost")
 EMAIL_TIMEOUT = 20
 
-ORGANIZATION_NAME = os.getenv("ORGANIZATION_NAME", "Organización de Recaudos")
+ORGANIZATION_NAME = os.getenv("ORGANIZATION_NAME", "Fundación Recaudo")
 ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "admin")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "Skorpion18***")
 ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "admin@localhost")

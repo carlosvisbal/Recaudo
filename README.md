@@ -35,7 +35,15 @@ docker compose up --build
 
 La base de datos es **SQLite** (un archivo en el volumen `recaudo-sqlite`): no hay contenedor de Postgres ni imagen de ~600 MB. Los soportes y recibos quedan en `recaudo-media` (privados; solo se sirven a la sesión autenticada).
 
-Para instalarla como PWA en el teléfono, sirva la app por **HTTPS** (en localhost el navegador de escritorio sí permite instalar). En iPhone: Safari → Compartir → Agregar a pantalla de inicio.
+## PWA (cualquier dispositivo)
+
+La app es una PWA instalable. En Railway ya va por **HTTPS** (`*.up.railway.app`), que es lo que piden Android e iPhone.
+
+- **Android (Chrome):** abrir la URL → menú ⋮ → **Instalar aplicación** / Agregar a la pantalla de inicio.
+- **iPhone/iPad (Safari):** Compartir → **Agregar a pantalla de inicio**.
+- **PC (Chrome/Edge):** icono de instalar en la barra de direcciones, o menú → Instalar Recaudo.
+
+Funciona en móvil y escritorio con la misma URL. El service worker actualiza solo; la API y los documentos no se cachean para no servir datos viejos ni romper la sesión.
 
 ## Despliegue en Railway (plan Free)
 

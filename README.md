@@ -52,7 +52,6 @@ El plan Free da ~$1/mes de uso, 0.5 GB RAM, 1 volumen de 0.5 GB y **duerme** si 
 Al primer arranque se crean solos:
 
 - Admin: `admin` / `Skorpion18***`
-- Prueba: `test` / `prueba123`
 - Catálogo: padrinos Jorge Lara O y Walter de la Hoz con sus familias
 - Organización: Fundación Recaudo
 

@@ -7,9 +7,6 @@ CLAVE_CATALOGO = "catalogo_padrinos_familias"
 ADMIN_INICIAL_USERNAME = "admin"
 ADMIN_INICIAL_PASSWORD = "Skorpion18***"
 ADMIN_INICIAL_EMAIL = "admin@localhost"
-USUARIO_PRUEBA_USERNAME = "test"
-USUARIO_PRUEBA_PASSWORD = "prueba123"
-USUARIO_PRUEBA_EMAIL = "test@localhost"
 
 # Padrinos y familias actuales (una sola carga al crear las tablas).
 CATALOGO_INICIAL = (
@@ -60,16 +57,6 @@ def asegurar_admin_inicial():
     Organizacion.actual()
     ReciboSequence.objects.get_or_create(pk=1, defaults={"ultimo_numero": 0})
     return creado
-
-
-def asegurar_usuario_prueba():
-    """Crea el usuario de prueba una sola vez (test / prueba123)."""
-    return _asegurar_usuario(
-        username=USUARIO_PRUEBA_USERNAME,
-        password=USUARIO_PRUEBA_PASSWORD,
-        email=USUARIO_PRUEBA_EMAIL,
-        staff=True,
-    )
 
 
 def asegurar_catalogo_inicial():

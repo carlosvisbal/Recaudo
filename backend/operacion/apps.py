@@ -14,14 +14,9 @@ def _seed_tras_migrar(sender, **kwargs):
         return
     if os.getenv("SKIP_SEED", "").strip().lower() in {"1", "true", "yes", "si", "sí"}:
         return
-    from operacion.seed import (
-        asegurar_admin_inicial,
-        asegurar_catalogo_inicial,
-        asegurar_usuario_prueba,
-    )
+    from operacion.seed import asegurar_admin_inicial, asegurar_catalogo_inicial
 
     asegurar_admin_inicial()
-    asegurar_usuario_prueba()
     asegurar_catalogo_inicial()
 
 

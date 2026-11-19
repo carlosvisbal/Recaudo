@@ -10,32 +10,51 @@ from .models import (
     Padrino,
     Recaudo,
     ReciboPdf,
+    ReciboSequence,
+    Semilla,
     Soporte,
 )
+
+admin.site.site_header = "Recaudo — administración"
+admin.site.site_title = "Recaudo admin"
+admin.site.index_title = "Panel general (uso de emergencia o soporte)"
 
 
 @admin.register(Organizacion)
 class OrganizacionAdmin(admin.ModelAdmin):
-    list_display = ("nombre", "ciudad", "correo")
+    list_display = ("nombre", "nit", "ciudad", "telefono", "correo", "actualizado_en")
+
+
+@admin.register(ReciboSequence)
+class ReciboSequenceAdmin(admin.ModelAdmin):
+    list_display = ("pk", "ultimo_numero")
+
+
+@admin.register(Semilla)
+class SemillaAdmin(admin.ModelAdmin):
+    list_display = ("clave", "aplicada_en")
+    readonly_fields = ("clave", "aplicada_en")
 
 
 @admin.register(Padrino)
 class PadrinoAdmin(admin.ModelAdmin):
-    list_display = ("nombre_completo", "telefono", "correo", "estado")
+    list_display = ("nombre_completo", "telefono", "correo", "estado", "creado_en")
     search_fields = ("nombre_completo", "telefono", "correo")
     list_filter = ("estado",)
 
 
 @admin.register(Familia)
 class FamiliaAdmin(admin.ModelAdmin):
-    list_display = ("nombre", "padrino", "contacto_principal", "telefono", "estado")
-    search_fields = ("nombre", "contacto_principal")
+    list_display = ("nombre", "padrino", "contacto_principal", "telefono", "estado", "creado_en")
+    search_fields = ("nombre", "contacto_principal", "telefono")
     list_filter = ("estado", "padrino")
+    raw_id_fields = ("padrino",)
 
 
 @admin.register(AsignacionFamiliaHistorial)
 class AsignacionAdmin(admin.ModelAdmin):
-    list_display = ("familia", "padrino_anterior", "padrino_nuevo", "cambiado_en")
+    list_display = ("familia", "padrino_anterior", "padrino_nuevo", "cambiado_en", "cambiado_por")
+    search_fields = ("familia__nombre",)
     readonly_fields = (
         "familia",
         "padrino_anterior",
@@ -48,14 +67,16 @@ class AsignacionAdmin(admin.ModelAdmin):
 
 @admin.register(Actividad)
 class ActividadAdmin(admin.ModelAdmin):
-    list_display = ("nombre", "fecha_inicio", "fecha_fin", "estado")
+    list_display = ("nombre", "fecha_inicio", "fecha_fin", "estado", "creado_en")
+    search_fields = ("nombre",)
     list_filter = ("estado",)
 
 
 class SoporteInline(admin.TabularInline):
     model = Soporte
     extra = 0
-    readonly_fields = ("nombre_original", "content_type", "tamano", "subido_en")
+    readonly_fields = ("nombre_original", "content_type", "tamano", "subido_en", "archivo")
+    fields = ("nombre_original", "content_type", "tamano", "archivo", "subido_en")
 
 
 @admin.register(Recaudo)
@@ -67,13 +88,16 @@ class RecaudoAdmin(admin.ModelAdmin):
         "padrino_nombre",
         "aportante_nombre",
         "valor",
+        "medio_pago",
         "estado",
+        "creado_en",
     )
     list_filter = ("estado", "medio_pago", "actividad")
-    search_fields = ("numero", "aportante_nombre", "concepto")
+    search_fields = ("numero", "aportante_nombre", "concepto", "familia_nombre", "padrino_nombre")
+    date_hierarchy = "fecha"
+    raw_id_fields = ("actividad", "padrino", "familia", "registrado_por", "anulado_por")
     readonly_fields = (
         "numero",
-        "valor",
         "valor_en_letras",
         "organizacion_nombre",
         "actividad_nombre",
@@ -81,37 +105,38 @@ class RecaudoAdmin(admin.ModelAdmin):
         "familia_nombre",
         "usuario_nombre",
         "creado_en",
-        "registrado_por",
-        "anulado_por",
-        "anulado_en",
     )
     inlines = [SoporteInline]
 
-    def has_delete_permission(self, request, obj=None):
-        return False
+
+@admin.register(Soporte)
+class SoporteAdmin(admin.ModelAdmin):
+    list_display = ("nombre_original", "recaudo", "content_type", "tamano", "subido_en")
+    search_fields = ("nombre_original", "recaudo__numero")
+    raw_id_fields = ("recaudo",)
+    readonly_fields = ("nombre_original", "content_type", "tamano", "subido_en")
 
 
 @admin.register(ReciboPdf)
 class ReciboAdmin(admin.ModelAdmin):
     list_display = ("recaudo", "generado_en")
-    readonly_fields = ("recaudo", "archivo", "generado_en")
-
-    def has_delete_permission(self, request, obj=None):
-        return False
+    raw_id_fields = ("recaudo",)
+    readonly_fields = ("generado_en",)
 
 
 @admin.register(Auditoria)
 class AuditoriaAdmin(admin.ModelAdmin):
-    list_display = ("creado_en", "accion", "entidad", "usuario")
+    list_display = ("creado_en", "accion", "entidad", "entidad_id", "usuario", "ip")
+    list_filter = ("accion", "entidad")
+    search_fields = ("accion", "entidad", "entidad_id")
     readonly_fields = ("accion", "entidad", "entidad_id", "payload", "usuario", "creado_en", "ip")
-
-    def has_delete_permission(self, request, obj=None):
-        return False
 
 
 @admin.register(EnvioCorreo)
 class EnvioAdmin(admin.ModelAdmin):
-    list_display = ("enviado_en", "destinatario", "resultado", "recaudo")
+    list_display = ("enviado_en", "destinatario", "resultado", "recaudo", "usuario")
+    list_filter = ("resultado",)
+    search_fields = ("destinatario", "asunto")
     readonly_fields = (
         "recaudo",
         "destinatario",

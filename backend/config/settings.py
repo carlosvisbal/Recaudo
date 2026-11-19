@@ -194,6 +194,10 @@ MEDIA_ROOT = Path(
     os.getenv("MEDIA_ROOT")
     or (f"{_volume}/media" if _volume else BASE_DIR / "media")
 )
+# Tope de subida alineado con soportes de 5 MB (+ margen multipart).
+DATA_UPLOAD_MAX_MEMORY_SIZE = 6 * 1024 * 1024
+FILE_UPLOAD_MAX_MEMORY_SIZE = 6 * 1024 * 1024
+FILE_UPLOAD_PERMISSIONS = 0o644
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 

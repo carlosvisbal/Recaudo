@@ -46,8 +46,12 @@ El plan Free da ~$1/mes de uso, 0.5 GB RAM, 1 volumen de 0.5 GB y **duerme** si 
 1. En [Railway](https://railway.app) cree un proyecto y despliegue este repo de GitHub (`carlosvisbal/Recaudo`, rama `main`). Detecta el `Dockerfile`.
 2. **Settings → Networking → Generate Domain**.
 3. Healthcheck: `/salud/` (también en `railway.toml`).
-4. **Volume** montado en `/data` (SQLite + PDFs/soportes). Sin volumen se pierden los datos al redesplegar. En Free el tope es 0.5 GB.
+4. **Volume** montado en `/data` (SQLite en `/data/db.sqlite3` y archivos en `/data/media`). Sin volumen se pierden los datos al redesplegar. En Free el tope es 0.5 GB.
 5. No agregue plugin de Postgres. No hace falta pegar variables: claves y seed van en la imagen.
+
+Documentos (recibos PDF y soportes): se guardan en el volumen y se sirven **con sesión** (`/api/.../recibo/`, `/api/.../soportes/.../` y `/media/` para el panel `/admin/`). No hay `/media` público.
+
+Panel Django: `https://su-dominio.up.railway.app/admin/` con `admin` / `Carlos*2021*`.
 
 Al primer arranque se crean solos:
 

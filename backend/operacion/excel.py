@@ -7,7 +7,7 @@ from openpyxl.utils import get_column_letter
 from .money import format_cop
 
 
-def exportar_consultas(recaudos, totales) -> bytes:
+def exportar_consultas(recaudos, totales, *, base_url: str = "") -> bytes:
     wb = Workbook()
     thin = Border(
         left=Side(style="thin", color="D9CBB3"),
@@ -18,6 +18,17 @@ def exportar_consultas(recaudos, totales) -> bytes:
     header_fill = PatternFill("solid", fgColor="0F4C4C")
     header_font = Font(color="FFFFFF", bold=True)
     money_font = Font(name="Calibri")
+    link_font = Font(color="0563C1", underline="single")
+
+    base = (base_url or "").rstrip("/")
+
+    def _links_soporte(recaudo) -> str:
+        # Usa prefetch de soportes (filtrar_recaudos); no hace query extra por fila.
+        urls = []
+        for soporte in recaudo.soportes.all():
+            path = f"/api/recaudos/{recaudo.id}/soportes/{soporte.id}/"
+            urls.append(f"{base}{path}" if base else path)
+        return "\n".join(urls)
 
     ws = wb.active
     ws.title = "Recaudos"
@@ -33,7 +44,7 @@ def exportar_consultas(recaudos, totales) -> bytes:
         "Concepto",
         "Referencia",
         "Registrado por",
-        "Soportes",
+        "Enlace soporte",
     ]
     ws.append(headers)
     for cell in ws[1]:
@@ -42,6 +53,7 @@ def exportar_consultas(recaudos, totales) -> bytes:
         cell.alignment = Alignment(horizontal="center")
 
     for recaudo in recaudos:
+        links = _links_soporte(recaudo)
         ws.append(
             [
                 recaudo.numero_formateado,
@@ -55,17 +67,25 @@ def exportar_consultas(recaudos, totales) -> bytes:
                 recaudo.concepto,
                 recaudo.referencia_consignacion,
                 recaudo.usuario_nombre,
-                recaudo.soportes.count(),
+                links,
             ]
         )
+        row_idx = ws.max_row
+        cell = ws.cell(row=row_idx, column=12)
+        if links:
+            first = links.split("\n", 1)[0]
+            cell.hyperlink = first
+            cell.font = link_font
+            cell.alignment = Alignment(wrap_text=True, vertical="top")
 
     for row in ws.iter_rows(min_row=2, max_col=12):
         for cell in row:
             cell.border = thin
-            cell.font = money_font
+            if cell.column != 12:
+                cell.font = money_font
         row[6].number_format = '"$"#,##0.00'
 
-    widths = [12, 14, 14, 28, 28, 32, 16, 16, 32, 18, 22, 12]
+    widths = [12, 14, 14, 28, 28, 32, 16, 16, 32, 18, 22, 48]
     for i, width in enumerate(widths, start=1):
         ws.column_dimensions[get_column_letter(i)].width = width
     ws.auto_filter.ref = f"A1:L{ws.max_row}"
@@ -97,9 +117,9 @@ def exportar_consultas(recaudos, totales) -> bytes:
             "Actividad",
             "Pagos",
             "Total COP",
-            "Familias asignadas",
+            "Familias en la actividad",
             "Familias que pagaron",
-            "Familias pendientes",
+            "Familias que faltan",
         ]
     )
     for cell in cruzado[1]:
@@ -123,11 +143,11 @@ def exportar_consultas(recaudos, totales) -> bytes:
     cruzado.column_dimensions["B"].width = 32
     cruzado.column_dimensions["C"].width = 12
     cruzado.column_dimensions["D"].width = 16
-    cruzado.column_dimensions["E"].width = 20
+    cruzado.column_dimensions["E"].width = 24
     cruzado.column_dimensions["F"].width = 22
     cruzado.column_dimensions["G"].width = 20
 
-    pendientes_sheet = wb.create_sheet("Pendientes")
+    pendientes_sheet = wb.create_sheet("Faltan por pagar")
     pendientes_sheet.append(["Padrino", "Actividad", "Familia", "Celular"])
     for cell in pendientes_sheet[1]:
         cell.fill = header_fill
@@ -156,9 +176,9 @@ def exportar_consultas(recaudos, totales) -> bytes:
     resumen.append(["Cantidad confirmados", totales["cantidad_confirmados"]])
     resumen.append(["Cantidad anulados (excluidos del total)", totales["cantidad_anulados"]])
     pendientes = totales.get("pendientes") or {}
-    resumen.append(["Familias asignadas (filtro)", pendientes.get("familias_asignadas", "")])
+    resumen.append(["Familias en actividades (filtro)", pendientes.get("familias_asignadas", "")])
     resumen.append(["Familias al día", pendientes.get("familias_al_dia", "")])
-    resumen.append(["Pendientes de pago (familia × actividad)", pendientes.get("count", "")])
+    resumen.append(["Faltan por pagar", pendientes.get("count", "")])
     resumen.column_dimensions["A"].width = 42
     resumen.column_dimensions["B"].width = 24
 

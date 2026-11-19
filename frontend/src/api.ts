@@ -101,15 +101,71 @@ export type Familia = {
   estado: "activo" | "inactivo";
 };
 
+export type ActividadParticipante = {
+  id: string;
+  familia: string;
+  familia_nombre: string;
+  padrino: string;
+  padrino_nombre: string;
+};
+
+export type ActividadPersona = {
+  id: string;
+  nombre: string;
+  telefono: string;
+};
+
 export type Actividad = {
   id: string;
   nombre: string;
   descripcion: string;
   fecha_inicio: string;
   fecha_fin: string;
+  tipo?: "apadrinamiento" | "general";
+  tipo_label?: string;
+  cobro_cada?: "una_vez" | "mes" | "quincena";
+  cobro_cada_label?: string;
   estado: "programada" | "activa" | "cerrada";
+  participantes?: ActividadParticipante[];
+  personas?: ActividadPersona[];
+  cantidad_familias?: number;
+  cantidad_personas?: number;
   total_recaudado?: string | null;
   cantidad_recaudos?: number;
+};
+
+export type ActividadControl = {
+  actividad_id: string;
+  actividad_nombre: string;
+  tipo?: "apadrinamiento" | "general";
+  tipo_label?: string;
+  cobro_cada: "una_vez" | "mes" | "quincena";
+  cobro_cada_label: string;
+  etiqueta_periodo: string;
+  fecha_inicial: string;
+  fecha_final: string;
+  pagaron: {
+    familia_id?: string;
+    familia_nombre?: string;
+    persona_id?: string;
+    persona_nombre?: string;
+    telefono: string;
+    padrino_id?: string;
+    padrino_nombre?: string;
+  }[];
+  faltan: {
+    familia_id?: string;
+    familia_nombre?: string;
+    persona_id?: string;
+    persona_nombre?: string;
+    telefono: string;
+    padrino_id?: string;
+    padrino_nombre?: string;
+  }[];
+  cantidad_pagaron: number;
+  cantidad_faltan: number;
+  cantidad_familias: number;
+  cantidad_personas?: number;
 };
 
 export type Recaudo = {

@@ -1,8 +1,10 @@
 import uuid
+from pathlib import Path
 
 from django.conf import settings
 from django.core.validators import MinValueValidator
 from django.db import models
+from django.utils import timezone
 
 
 class EstadoRegistro(models.TextChoices):
@@ -14,6 +16,26 @@ class EstadoActividad(models.TextChoices):
     PROGRAMADA = "programada", "Programada"
     ACTIVA = "activa", "Activa"
     CERRADA = "cerrada", "Cerrada"
+
+
+class TipoActividad(models.TextChoices):
+    APADRINAMIENTO = "apadrinamiento", "Con padrinos y familias"
+    GENERAL = "general", "Personas (nombre y celular)"
+
+
+class CobroCada(models.TextChoices):
+    UNA_VEZ = "una_vez", "Un solo pago"
+    MES = "mes", "Cada mes"
+    QUINCENA = "quincena", "Cada quincena"
+
+
+def soporte_upload_to(instance, filename: str) -> str:
+    """Guarda el archivo como UUID + extensión bajo private/soportes/AAAA/MM/."""
+    ext = Path(filename).suffix.lower()
+    if not ext or len(ext) > 10:
+        ext = ".bin"
+    stamp = timezone.now().strftime("%Y/%m")
+    return f"private/soportes/{stamp}/{instance.id}{ext}"
 
 
 class MedioPago(models.TextChoices):
@@ -162,6 +184,14 @@ class Actividad(models.Model):
     descripcion = models.TextField(blank=True)
     fecha_inicio = models.DateField()
     fecha_fin = models.DateField()
+    tipo = models.CharField(
+        max_length=20,
+        choices=TipoActividad.choices,
+        default=TipoActividad.APADRINAMIENTO,
+    )
+    cobro_cada = models.CharField(
+        max_length=12, choices=CobroCada.choices, default=CobroCada.MES
+    )
     estado = models.CharField(
         max_length=12, choices=EstadoActividad.choices, default=EstadoActividad.ACTIVA
     )
@@ -172,6 +202,63 @@ class Actividad(models.Model):
         ordering = ["-fecha_inicio", "nombre"]
         verbose_name = "actividad"
         verbose_name_plural = "actividades"
+
+    def __str__(self) -> str:
+        return self.nombre
+
+    @property
+    def es_general(self) -> bool:
+        return self.tipo == TipoActividad.GENERAL
+
+
+class ActividadParticipante(models.Model):
+    """Familia que paga en una actividad de apadrinamiento."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    actividad = models.ForeignKey(
+        Actividad, on_delete=models.CASCADE, related_name="participantes"
+    )
+    familia = models.ForeignKey(
+        Familia, on_delete=models.CASCADE, related_name="participaciones"
+    )
+    padrino = models.ForeignKey(
+        Padrino, on_delete=models.PROTECT, related_name="participaciones_actividad"
+    )
+    creado_en = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["padrino__nombre_completo", "familia__nombre"]
+        verbose_name = "participante de actividad"
+        verbose_name_plural = "participantes de actividad"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["actividad", "familia"], name="uniq_actividad_familia"
+            )
+        ]
+        indexes = [
+            models.Index(fields=["actividad", "padrino"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.familia} · {self.actividad}"
+
+
+class ActividadPersona(models.Model):
+    """Persona suelta (nombre + celular) en una actividad general."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    actividad = models.ForeignKey(
+        Actividad, on_delete=models.CASCADE, related_name="personas"
+    )
+    nombre = models.CharField(max_length=160)
+    telefono = models.CharField(max_length=40, blank=True)
+    creado_en = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["nombre"]
+        verbose_name = "persona de actividad"
+        verbose_name_plural = "personas de actividad"
+        indexes = [models.Index(fields=["actividad", "nombre"])]
 
     def __str__(self) -> str:
         return self.nombre
@@ -193,10 +280,21 @@ class Recaudo(models.Model):
         Actividad, on_delete=models.PROTECT, related_name="recaudos"
     )
     padrino = models.ForeignKey(
-        Padrino, on_delete=models.PROTECT, related_name="recaudos"
+        Padrino,
+        on_delete=models.PROTECT,
+        related_name="recaudos",
+        null=True,
+        blank=True,
     )
     familia = models.ForeignKey(
         Familia,
+        on_delete=models.PROTECT,
+        related_name="recaudos",
+        null=True,
+        blank=True,
+    )
+    persona = models.ForeignKey(
+        ActividadPersona,
         on_delete=models.PROTECT,
         related_name="recaudos",
         null=True,
@@ -228,7 +326,7 @@ class Recaudo(models.Model):
     )
     organizacion_nombre = models.CharField(max_length=180)
     actividad_nombre = models.CharField(max_length=160)
-    padrino_nombre = models.CharField(max_length=160)
+    padrino_nombre = models.CharField(max_length=160, blank=True)
     familia_nombre = models.CharField(max_length=160, blank=True)
     usuario_nombre = models.CharField(max_length=160)
     valor_en_letras = models.CharField(max_length=400)
@@ -259,7 +357,7 @@ class Soporte(models.Model):
     recaudo = models.ForeignKey(
         Recaudo, on_delete=models.PROTECT, related_name="soportes"
     )
-    archivo = models.FileField(upload_to="private/soportes/%Y/%m/")
+    archivo = models.FileField(upload_to=soporte_upload_to)
     nombre_original = models.CharField(max_length=255)
     content_type = models.CharField(max_length=80)
     tamano = models.PositiveIntegerField()

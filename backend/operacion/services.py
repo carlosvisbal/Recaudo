@@ -1,6 +1,7 @@
 from collections import defaultdict
 from datetime import date
 from decimal import Decimal
+from pathlib import Path
 from urllib.parse import quote
 
 from django.conf import settings
@@ -16,7 +17,10 @@ from . import audit
 from .files import validate_soporte
 from .models import (
     Actividad,
+    ActividadParticipante,
+    ActividadPersona,
     AsignacionFamiliaHistorial,
+    CobroCada,
     EnvioCorreo,
     EstadoActividad,
     EstadoRecaudo,
@@ -30,9 +34,11 @@ from .models import (
     ReciboSequence,
     ResultadoEnvio,
     Soporte,
+    TipoActividad,
 )
 from .money import format_cop, money, numero_a_letras
 from .pdf import generar_pdf_recibo
+from .periodos import etiqueta_cobro, rango_cobro
 
 
 def siguiente_numero_recibo() -> int:
@@ -174,16 +180,95 @@ def eliminar_actividad(actividad: Actividad, usuario, request=None) -> dict:
     return {"nombre": nombre, "pagos_eliminados": len(recaudos)}
 
 
-def _validar_datos_pago(data: dict, archivos: list, *, soportes_actuales: int = 0) -> dict:
+def _rango_actividad(actividad: Actividad, ref: date | None = None) -> tuple[date, date]:
+    return rango_cobro(
+        actividad.cobro_cada or CobroCada.MES,
+        ref or date.today(),
+        fecha_inicio=actividad.fecha_inicio,
+        fecha_fin=actividad.fecha_fin,
+    )
+
+
+def _etiqueta_periodo_actividad(actividad: Actividad, ref: date | None = None) -> str:
+    return etiqueta_cobro(
+        actividad.cobro_cada or CobroCada.MES,
+        ref or date.today(),
+        fecha_inicio=actividad.fecha_inicio,
+        fecha_fin=actividad.fecha_fin,
+    )
+
+
+def _asegurar_participante(actividad: Actividad, familia: Familia) -> None:
+    """Si la familia no está en la actividad, la agrega (flujo fácil al cobrar)."""
+    ActividadParticipante.objects.get_or_create(
+        actividad=actividad,
+        familia=familia,
+        defaults={"padrino_id": familia.padrino_id},
+    )
+
+
+def ya_pago_en_periodo(
+    actividad: Actividad,
+    *,
+    familia: Familia | None = None,
+    persona: ActividadPersona | None = None,
+    fecha: date | None = None,
+    exclude_recaudo_id=None,
+) -> Recaudo | None:
+    """Devuelve el pago confirmado del mismo tramo, si existe."""
+    ref = fecha or date.today()
+    inicio, fin = _rango_actividad(actividad, ref)
+    qs = Recaudo.objects.filter(
+        actividad=actividad,
+        estado=EstadoRecaudo.CONFIRMADO,
+        fecha__gte=inicio,
+        fecha__lte=fin,
+    ).order_by("-numero")
+    if familia:
+        qs = qs.filter(familia=familia)
+    elif persona:
+        qs = qs.filter(persona=persona)
+    else:
+        return None
+    if exclude_recaudo_id:
+        qs = qs.exclude(pk=exclude_recaudo_id)
+    return qs.first()
+
+
+def _validar_datos_pago(
+    data: dict,
+    archivos: list,
+    *,
+    soportes_actuales: int = 0,
+    exclude_recaudo_id=None,
+) -> dict:
     actividad: Actividad = data["actividad"]
-    padrino: Padrino = data["padrino"]
+    padrino: Padrino | None = data.get("padrino")
     familia: Familia | None = data.get("familia")
+    persona: ActividadPersona | None = data.get("persona")
+
     if actividad.estado == EstadoActividad.CERRADA:
         raise ValidationError("No se pueden registrar recaudos en una actividad cerrada.")
-    if padrino.estado != EstadoRegistro.ACTIVO:
-        raise ValidationError("El padrino responsable está inactivo.")
-    if familia and familia.estado != EstadoRegistro.ACTIVO:
-        raise ValidationError("La familia está inactiva.")
+
+    if actividad.tipo == TipoActividad.GENERAL:
+        if not persona:
+            raise ValidationError("Elija la persona que está pagando.")
+        if persona.actividad_id != actividad.id:
+            raise ValidationError("Esa persona no pertenece a esta actividad.")
+        padrino = None
+        familia = None
+    else:
+        if not padrino:
+            raise ValidationError("Elija el padrino a quien se evidencia el pago.")
+        if not familia:
+            raise ValidationError("Elija la familia que está realizando el pago.")
+        if padrino.estado != EstadoRegistro.ACTIVO:
+            raise ValidationError("El padrino responsable está inactivo.")
+        if familia.estado != EstadoRegistro.ACTIVO:
+            raise ValidationError("La familia está inactiva.")
+        if familia.padrino_id != padrino.id:
+            raise ValidationError("Esa familia no pertenece al padrino elegido.")
+        persona = None
 
     valor = money(data["valor"])
     if valor <= Decimal("0.00"):
@@ -194,10 +279,13 @@ def _validar_datos_pago(data: dict, archivos: list, *, soportes_actuales: int = 
         raise ValidationError("Medio de pago no válido.")
 
     aportante = (data.get("aportante_nombre") or "").strip()
-    if familia and not aportante:
-        aportante = familia.nombre
     if not aportante:
-        raise ValidationError("Indique la familia o la persona que entrega el dinero.")
+        if familia:
+            aportante = familia.nombre
+        elif persona:
+            aportante = persona.nombre
+    if not aportante:
+        raise ValidationError("Indique quién entrega el dinero.")
 
     archivos = archivos or []
     if medio == MedioPago.EFECTIVO and archivos:
@@ -208,14 +296,53 @@ def _validar_datos_pago(data: dict, archivos: list, *, soportes_actuales: int = 
         )
     if len(archivos) > settings.MAX_SOPORTES_POR_RECAUDO:
         raise ValidationError("Puede adjuntar como máximo 8 soportes.")
+
+    fecha_pago = data.get("fecha") or date.today()
+    aviso_duplicado = None
+    if familia:
+        _asegurar_participante(actividad, familia)
+        previo = ya_pago_en_periodo(
+            actividad,
+            familia=familia,
+            fecha=fecha_pago,
+            exclude_recaudo_id=exclude_recaudo_id,
+        )
+        nombre = familia.nombre
+    elif persona:
+        previo = ya_pago_en_periodo(
+            actividad,
+            persona=persona,
+            fecha=fecha_pago,
+            exclude_recaudo_id=exclude_recaudo_id,
+        )
+        nombre = persona.nombre
+    else:
+        previo = None
+        nombre = aportante
+
+    if previo:
+        if actividad.cobro_cada == CobroCada.UNA_VEZ:
+            etiqueta = "esta actividad (un solo pago)"
+        elif actividad.cobro_cada == CobroCada.QUINCENA:
+            etiqueta = "esta quincena"
+        else:
+            etiqueta = "este mes"
+        aviso_duplicado = (
+            f"{nombre} ya tiene un pago en {etiqueta} "
+            f"(recibo {previo.numero_formateado} por {format_cop(previo.valor)}). "
+            "Si continúa, se registrará otro pago."
+        )
+
     return {
         "actividad": actividad,
         "padrino": padrino,
         "familia": familia,
+        "persona": persona,
         "valor": valor,
         "medio": medio,
         "aportante": aportante,
         "archivos": archivos,
+        "aviso_duplicado": aviso_duplicado,
     }
 
 
@@ -229,22 +356,214 @@ def _regenerar_recibo(recaudo: Recaudo) -> None:
     )
 
 
+def _guardar_soporte(recaudo: Recaudo, uploaded) -> Soporte:
+    """Persiste el soporte con nombre de archivo = UUID + extensión."""
+    nombre, content_type, tamano = validate_soporte(uploaded)
+    ext = Path(nombre).suffix.lower() or ".bin"
+    soporte = Soporte(
+        recaudo=recaudo,
+        nombre_original=nombre,
+        content_type=content_type,
+        tamano=tamano,
+    )
+    # El id UUID ya está asignado; upload_to usa instance.id
+    soporte.archivo.save(f"{soporte.id}{ext}", uploaded, save=True)
+    return soporte
+
+
+def sincronizar_participantes(actividad: Actividad, familia_ids: list) -> None:
+    """Reemplaza las familias de la actividad por la lista indicada."""
+    ids = []
+    for raw in familia_ids or []:
+        if raw in (None, ""):
+            continue
+        ids.append(str(raw))
+    # únicos preservando orden
+    seen = set()
+    uniq = []
+    for fid in ids:
+        if fid in seen:
+            continue
+        seen.add(fid)
+        uniq.append(fid)
+
+    familias = {
+        str(f.id): f
+        for f in Familia.objects.select_related("padrino").filter(id__in=uniq)
+    }
+    faltan = [fid for fid in uniq if fid not in familias]
+    if faltan:
+        raise ValidationError(
+            {"familias": f"No se encontraron {len(faltan)} familia(s) indicada(s)."}
+        )
+
+    actuales = {
+        str(p.familia_id): p
+        for p in ActividadParticipante.objects.filter(actividad=actividad)
+    }
+    keep = set()
+    for fid in uniq:
+        familia = familias[fid]
+        keep.add(fid)
+        existente = actuales.get(fid)
+        if existente:
+            if existente.padrino_id != familia.padrino_id:
+                existente.padrino = familia.padrino
+                existente.save(update_fields=["padrino"])
+        else:
+            ActividadParticipante.objects.create(
+                actividad=actividad,
+                familia=familia,
+                padrino=familia.padrino,
+            )
+    ActividadParticipante.objects.filter(actividad=actividad).exclude(
+        familia_id__in=keep
+    ).delete()
+
+
+def sincronizar_personas(actividad: Actividad, personas: list) -> None:
+    """
+    Reemplaza las personas de una actividad general.
+    cada item: {id?, nombre, telefono}
+    """
+    keep_ids = set()
+    for raw in personas or []:
+        if not isinstance(raw, dict):
+            continue
+        nombre = (raw.get("nombre") or "").strip()
+        if not nombre:
+            continue
+        telefono = (raw.get("telefono") or "").strip()
+        pid = raw.get("id")
+        if pid:
+            try:
+                persona = ActividadPersona.objects.get(pk=pid, actividad=actividad)
+            except ActividadPersona.DoesNotExist:
+                persona = ActividadPersona(actividad=actividad)
+            persona.nombre = nombre
+            persona.telefono = telefono
+            persona.save()
+            keep_ids.add(persona.id)
+        else:
+            persona = ActividadPersona.objects.create(
+                actividad=actividad, nombre=nombre, telefono=telefono
+            )
+            keep_ids.add(persona.id)
+    ActividadPersona.objects.filter(actividad=actividad).exclude(id__in=keep_ids).delete()
+
+
+def control_actividad(actividad: Actividad, *, ref: date | None = None) -> dict:
+    """Listas Pagaron / Faltan del tramo (un solo pago, mes o quincena)."""
+    ref = ref or date.today()
+    inicio, fin = _rango_actividad(actividad, ref)
+    base = {
+        "actividad_id": str(actividad.id),
+        "actividad_nombre": actividad.nombre,
+        "tipo": actividad.tipo,
+        "tipo_label": actividad.get_tipo_display(),
+        "cobro_cada": actividad.cobro_cada,
+        "cobro_cada_label": actividad.get_cobro_cada_display(),
+        "etiqueta_periodo": _etiqueta_periodo_actividad(actividad, ref),
+        "fecha_inicial": inicio.isoformat(),
+        "fecha_final": fin.isoformat(),
+    }
+
+    if actividad.tipo == TipoActividad.GENERAL:
+        personas = list(actividad.personas.all().order_by("nombre"))
+        pagos = Recaudo.objects.filter(
+            actividad=actividad,
+            estado=EstadoRecaudo.CONFIRMADO,
+            persona_id__isnull=False,
+            fecha__gte=inicio,
+            fecha__lte=fin,
+        ).values_list("persona_id", flat=True)
+        pagaron_ids = set(pagos)
+        pagaron = []
+        faltan = []
+        for persona in personas:
+            fila = {
+                "persona_id": str(persona.id),
+                "persona_nombre": persona.nombre,
+                "telefono": persona.telefono or "",
+            }
+            if persona.id in pagaron_ids:
+                pagaron.append(fila)
+            else:
+                faltan.append(fila)
+        return {
+            **base,
+            "pagaron": pagaron,
+            "faltan": faltan,
+            "cantidad_pagaron": len(pagaron),
+            "cantidad_faltan": len(faltan),
+            "cantidad_familias": len(personas),
+            "cantidad_personas": len(personas),
+        }
+
+    participantes = list(
+        ActividadParticipante.objects.filter(actividad=actividad)
+        .select_related("familia", "padrino")
+        .order_by("padrino__nombre_completo", "familia__nombre")
+    )
+    pagos = Recaudo.objects.filter(
+        actividad=actividad,
+        estado=EstadoRecaudo.CONFIRMADO,
+        familia_id__isnull=False,
+        fecha__gte=inicio,
+        fecha__lte=fin,
+    ).values_list("familia_id", flat=True)
+    pagaron_ids = set(pagos)
+
+    pagaron = []
+    faltan = []
+    for part in participantes:
+        fila = {
+            "familia_id": str(part.familia_id),
+            "familia_nombre": part.familia.nombre,
+            "telefono": part.familia.telefono or "",
+            "padrino_id": str(part.padrino_id),
+            "padrino_nombre": part.padrino.nombre_completo,
+        }
+        if part.familia_id in pagaron_ids:
+            pagaron.append(fila)
+        else:
+            faltan.append(fila)
+
+    return {
+        **base,
+        "pagaron": pagaron,
+        "faltan": faltan,
+        "cantidad_pagaron": len(pagaron),
+        "cantidad_faltan": len(faltan),
+        "cantidad_familias": len(participantes),
+        "cantidad_personas": 0,
+    }
+
+
 @transaction.atomic
 def actualizar_recaudo(*, recaudo: Recaudo, usuario, data: dict, archivos: list, request=None) -> Recaudo:
     if recaudo.estado == EstadoRecaudo.ANULADO:
         raise ValidationError("No se puede editar un pago anulado. Elimínelo si debe quitarlo.")
-    parsed = _validar_datos_pago(data, archivos, soportes_actuales=recaudo.soportes.count())
+    parsed = _validar_datos_pago(
+        data,
+        archivos,
+        soportes_actuales=recaudo.soportes.count(),
+        exclude_recaudo_id=recaudo.id,
+    )
     recaudo.fecha = data.get("fecha") or recaudo.fecha
     recaudo.actividad = parsed["actividad"]
     recaudo.padrino = parsed["padrino"]
     recaudo.familia = parsed["familia"]
+    recaudo.persona = parsed.get("persona")
     recaudo.aportante_nombre = parsed["aportante"]
     recaudo.valor = parsed["valor"]
     recaudo.medio_pago = parsed["medio"]
     recaudo.concepto = (data.get("concepto") or "").strip()
     recaudo.referencia_consignacion = (data.get("referencia_consignacion") or "").strip()
     recaudo.actividad_nombre = parsed["actividad"].nombre
-    recaudo.padrino_nombre = parsed["padrino"].nombre_completo
+    recaudo.padrino_nombre = (
+        parsed["padrino"].nombre_completo if parsed["padrino"] else ""
+    )
     recaudo.familia_nombre = parsed["familia"].nombre if parsed["familia"] else ""
     recaudo.valor_en_letras = numero_a_letras(parsed["valor"])
     recaudo.save()
@@ -254,14 +573,7 @@ def actualizar_recaudo(*, recaudo: Recaudo, usuario, data: dict, archivos: list,
             _borrar_campo_archivo(soporte.archivo)
             soporte.delete()
     for uploaded in parsed["archivos"]:
-        nombre, content_type, tamano = validate_soporte(uploaded)
-        Soporte.objects.create(
-            recaudo=recaudo,
-            archivo=uploaded,
-            nombre_original=nombre,
-            content_type=content_type,
-            tamano=tamano,
-        )
+        _guardar_soporte(recaudo, uploaded)
     _regenerar_recibo(recaudo)
     audit.registrar(
         usuario,
@@ -285,6 +597,7 @@ def confirmar_recaudo(*, usuario, data: dict, archivos: list, request=None) -> R
         actividad=parsed["actividad"],
         padrino=parsed["padrino"],
         familia=parsed["familia"],
+        persona=parsed.get("persona"),
         aportante_nombre=parsed["aportante"],
         valor=parsed["valor"],
         medio_pago=parsed["medio"],
@@ -294,21 +607,16 @@ def confirmar_recaudo(*, usuario, data: dict, archivos: list, request=None) -> R
         registrado_por=usuario,
         organizacion_nombre=org.nombre,
         actividad_nombre=parsed["actividad"].nombre,
-        padrino_nombre=parsed["padrino"].nombre_completo,
+        padrino_nombre=(
+            parsed["padrino"].nombre_completo if parsed["padrino"] else ""
+        ),
         familia_nombre=parsed["familia"].nombre if parsed["familia"] else "",
         usuario_nombre=usuario.get_full_name() or usuario.get_username(),
         valor_en_letras=numero_a_letras(parsed["valor"]),
     )
 
     for uploaded in parsed["archivos"]:
-        nombre, content_type, tamano = validate_soporte(uploaded)
-        Soporte.objects.create(
-            recaudo=recaudo,
-            archivo=uploaded,
-            nombre_original=nombre,
-            content_type=content_type,
-            tamano=tamano,
-        )
+        _guardar_soporte(recaudo, uploaded)
 
     _regenerar_recibo(recaudo)
     audit.registrar(
@@ -354,9 +662,14 @@ def anular_recaudo(recaudo: Recaudo, usuario, motivo: str, request=None) -> Reca
 
 
 def filtrar_recaudos(params) -> tuple:
-    qs = Recaudo.objects.select_related(
-        "actividad", "padrino", "familia", "registrado_por", "recibo"
-    ).prefetch_related("soportes")
+    qs = (
+        Recaudo.objects.select_related(
+            "actividad", "padrino", "familia", "persona", "registrado_por", "recibo"
+        )
+        .prefetch_related("soportes")
+        .annotate(soportes_count_annot=Count("soportes", distinct=True))
+        .order_by("-numero")
+    )
     padrino = params.get("padrino")
     familia = params.get("familia")
     actividad = params.get("actividad")
@@ -500,8 +813,17 @@ def informe(params, *, paginar_pendientes=True) -> dict:
 
 
 def _cruzado_y_pendientes(params, qs, *, paginar=True):
+    """Pendientes = familias de la actividad sin pago confirmado en el tramo (mes/quincena)."""
     padrino_id = params.get("padrino") or None
     actividad_id = params.get("actividad") or None
+    ref = date.today()
+    # Si el informe trae fecha_final, úsala como referencia del tramo
+    raw_fin = params.get("fecha_final")
+    if raw_fin:
+        try:
+            ref = date.fromisoformat(str(raw_fin)[:10])
+        except ValueError:
+            ref = date.today()
 
     actividades = Actividad.objects.all()
     if actividad_id:
@@ -509,25 +831,32 @@ def _cruzado_y_pendientes(params, qs, *, paginar=True):
     else:
         actividades = actividades.exclude(estado=EstadoActividad.CERRADA)
     actividades = list(actividades.order_by("nombre"))
+    act_by_id = {a.id: a for a in actividades}
 
-    padrinos = Padrino.objects.filter(estado=EstadoRegistro.ACTIVO)
-    if padrino_id:
-        padrinos = padrinos.filter(id=padrino_id)
-    padrinos = list(padrinos.order_by("nombre_completo"))
+    act_ids = [a.id for a in actividades]
+    if act_ids:
+        partes_qs = ActividadParticipante.objects.filter(
+            actividad_id__in=act_ids
+        ).select_related("familia", "padrino", "actividad")
+        if padrino_id:
+            partes_qs = partes_qs.filter(padrino_id=padrino_id)
+        participantes = list(partes_qs)
+    else:
+        participantes = []
+
+    padrino_ids = {p.padrino_id for p in participantes}
+    padrinos = list(
+        Padrino.objects.filter(id__in=padrino_ids).order_by("nombre_completo")
+        if padrino_ids
+        else Padrino.objects.none()
+    )
+    if padrino_id and not padrinos:
+        padrinos = list(Padrino.objects.filter(id=padrino_id))
     padrino_nombres = {p.id: p.nombre_completo for p in padrinos}
 
-    familias = Familia.objects.filter(estado=EstadoRegistro.ACTIVO)
-    if padrino_id:
-        familias = familias.filter(padrino_id=padrino_id)
-    fam_rows = list(familias.values("id", "nombre", "telefono", "padrino_id"))
-
     asignadas = defaultdict(int)
-    for fam in fam_rows:
-        asignadas[fam["padrino_id"]] += 1
-    faltan_nombres = {fam["padrino_id"] for fam in fam_rows} - set(padrino_nombres)
-    if faltan_nombres:
-        for extra in Padrino.objects.filter(id__in=faltan_nombres):
-            padrino_nombres[extra.id] = extra.nombre_completo
+    for part in participantes:
+        asignadas[(part.padrino_id, part.actividad_id)] += 1
 
     money_map = {}
     confirmados = qs.filter(estado=EstadoRecaudo.CONFIRMADO)
@@ -536,65 +865,134 @@ def _cruzado_y_pendientes(params, qs, *, paginar=True):
     ):
         money_map[(row["padrino_id"], row["actividad_id"])] = row
 
-    paid_qs = Recaudo.objects.filter(
-        estado=EstadoRecaudo.CONFIRMADO, familia_id__isnull=False
-    )
-    if actividad_id:
-        paid_qs = paid_qs.filter(actividad_id=actividad_id)
-    elif actividades:
-        paid_qs = paid_qs.filter(actividad_id__in=[a.id for a in actividades])
-    else:
-        paid_qs = paid_qs.none()
-    paid_pairs = set(paid_qs.values_list("familia_id", "actividad_id"))
+    # Pagos del tramo: agrupar por mismo rango → pocas queries, no N+1
+    paid_pairs = set()
+    paid_personas = set()
+    rangos: dict[tuple[date, date], list] = defaultdict(list)
+    for actividad in actividades:
+        inicio, fin = _rango_actividad(actividad, ref)
+        rangos[(inicio, fin)].append(actividad.id)
+    for (inicio, fin), ids in rangos.items():
+        for fam_id, act_id in Recaudo.objects.filter(
+            estado=EstadoRecaudo.CONFIRMADO,
+            familia_id__isnull=False,
+            actividad_id__in=ids,
+            fecha__gte=inicio,
+            fecha__lte=fin,
+        ).values_list("familia_id", "actividad_id"):
+            paid_pairs.add((fam_id, act_id))
+        for persona_id, act_id in Recaudo.objects.filter(
+            estado=EstadoRecaudo.CONFIRMADO,
+            persona_id__isnull=False,
+            actividad_id__in=ids,
+            fecha__gte=inicio,
+            fecha__lte=fin,
+        ).values_list("persona_id", "actividad_id"):
+            paid_personas.add((persona_id, act_id))
 
     pagaron_ahora = defaultdict(set)
     pendientes_list = []
-    act_ids_nombres = [(a.id, a.nombre) for a in actividades]
-    for fam in fam_rows:
-        for act_id, act_nombre in act_ids_nombres:
-            if (fam["id"], act_id) in paid_pairs:
-                pagaron_ahora[(fam["padrino_id"], act_id)].add(fam["id"])
-            else:
-                pendientes_list.append(
-                    {
-                        "familia_id": str(fam["id"]),
-                        "familia_nombre": fam["nombre"],
-                        "telefono": fam["telefono"] or "",
-                        "padrino_id": str(fam["padrino_id"]),
-                        "padrino_nombre": padrino_nombres.get(fam["padrino_id"], ""),
-                        "actividad_id": str(act_id),
-                        "actividad_nombre": act_nombre,
-                    }
-                )
-
-    pendientes_list.sort(
-        key=lambda item: (item["padrino_nombre"], item["actividad_nombre"], item["familia_nombre"])
-    )
-
-    cruzado = []
-    for padrino in padrinos:
-        for actividad in actividades:
-            money_row = money_map.get((padrino.id, actividad.id), {})
-            total_fila = money(money_row.get("total") or Decimal("0.00"))
-            asign = asignadas.get(padrino.id, 0)
-            pagaron = len(pagaron_ahora.get((padrino.id, actividad.id), set()))
-            cruzado.append(
+    for part in participantes:
+        act = act_by_id.get(part.actividad_id) or part.actividad
+        key = (part.familia_id, part.actividad_id)
+        if key in paid_pairs:
+            pagaron_ahora[(part.padrino_id, part.actividad_id)].add(part.familia_id)
+        else:
+            pendientes_list.append(
                 {
-                    "padrino_id": str(padrino.id),
-                    "padrino_nombre": padrino.nombre_completo,
-                    "actividad_id": str(actividad.id),
-                    "actividad_nombre": actividad.nombre,
-                    "total": str(total_fila),
-                    "total_formato": format_cop(total_fila),
-                    "cantidad": int(money_row.get("cantidad") or 0),
-                    "familias_asignadas": asign,
-                    "familias_pagaron": pagaron,
-                    "familias_pendientes": max(asign - pagaron, 0),
+                    "familia_id": str(part.familia_id),
+                    "familia_nombre": part.familia.nombre,
+                    "telefono": part.familia.telefono or "",
+                    "padrino_id": str(part.padrino_id),
+                    "padrino_nombre": padrino_nombres.get(
+                        part.padrino_id, part.padrino.nombre_completo
+                    ),
+                    "actividad_id": str(part.actividad_id),
+                    "actividad_nombre": act.nombre,
+                    "cobro_cada": act.cobro_cada,
+                    "tipo": act.tipo,
                 }
             )
 
-    asignadas_total = len(fam_rows)
-    familias_con_pendiente = {item["familia_id"] for item in pendientes_list}
+    # Pendientes de actividades generales (personas)
+    generales = [a for a in actividades if a.tipo == TipoActividad.GENERAL]
+    if generales:
+        personas_qs = ActividadPersona.objects.filter(
+            actividad_id__in=[a.id for a in generales]
+        ).select_related("actividad")
+        for persona in personas_qs:
+            if (persona.id, persona.actividad_id) in paid_personas:
+                continue
+            act = act_by_id.get(persona.actividad_id) or persona.actividad
+            pendientes_list.append(
+                {
+                    "persona_id": str(persona.id),
+                    "familia_id": None,
+                    "familia_nombre": persona.nombre,
+                    "telefono": persona.telefono or "",
+                    "padrino_id": None,
+                    "padrino_nombre": "Sin padrino",
+                    "actividad_id": str(persona.actividad_id),
+                    "actividad_nombre": act.nombre,
+                    "cobro_cada": act.cobro_cada,
+                    "tipo": act.tipo,
+                }
+            )
+
+    pendientes_list.sort(
+        key=lambda item: (
+            item["padrino_nombre"],
+            item["actividad_nombre"],
+            item["familia_nombre"],
+        )
+    )
+
+    # Cruzado: solo pares padrino×actividad que tienen participantes o dinero
+    pares = set(asignadas.keys()) | set(money_map.keys())
+    if not pares and padrinos and actividades:
+        pares = {(p.id, a.id) for p in padrinos for a in actividades}
+
+    cruzado = []
+    for padrino_pk, actividad_pk in sorted(
+        pares,
+        key=lambda pair: (
+            padrino_nombres.get(pair[0], ""),
+            act_by_id[pair[1]].nombre if pair[1] in act_by_id else "",
+        ),
+    ):
+        actividad = act_by_id.get(actividad_pk)
+        if not actividad:
+            continue
+        money_row = money_map.get((padrino_pk, actividad_pk), {})
+        total_fila = money(money_row.get("total") or Decimal("0.00"))
+        asign = asignadas.get((padrino_pk, actividad_pk), 0)
+        pagaron = len(pagaron_ahora.get((padrino_pk, actividad_pk), set()))
+        cruzado.append(
+            {
+                "padrino_id": str(padrino_pk),
+                "padrino_nombre": padrino_nombres.get(padrino_pk, ""),
+                "actividad_id": str(actividad_pk),
+                "actividad_nombre": actividad.nombre,
+                "total": str(total_fila),
+                "total_formato": format_cop(total_fila),
+                "cantidad": int(money_row.get("cantidad") or 0),
+                "familias_asignadas": asign,
+                "familias_pagaron": pagaron,
+                "familias_pendientes": max(asign - pagaron, 0),
+            }
+        )
+
+    personas_count = (
+        ActividadPersona.objects.filter(
+            actividad_id__in=[a.id for a in generales]
+        ).count()
+        if generales
+        else 0
+    )
+    asignadas_total = len(participantes) + personas_count
+    familias_con_pendiente = {
+        item.get("familia_id") or item.get("persona_id") for item in pendientes_list
+    }
     pendientes_payload = {
         "count": len(pendientes_list),
         "familias_asignadas": asignadas_total,

@@ -41,6 +41,7 @@ from .services import (
     actualizar_recaudo,
     anular_recaudo,
     confirmar_recaudo,
+    control_actividad,
     eliminar_actividad,
     eliminar_familia,
     eliminar_padrino,
@@ -281,8 +282,16 @@ class ActividadViewSet(viewsets.ModelViewSet):
                 filter=Q(recaudos__estado=EstadoRecaudo.CONFIRMADO),
             ),
             cantidad_recaudos=Count(
-                "recaudos", filter=Q(recaudos__estado=EstadoRecaudo.CONFIRMADO)
+                "recaudos",
+                filter=Q(recaudos__estado=EstadoRecaudo.CONFIRMADO),
+                distinct=True,
             ),
+            cantidad_familias_annot=Count("participantes", distinct=True),
+            cantidad_personas_annot=Count("personas", distinct=True),
+        ).prefetch_related(
+            "participantes__familia",
+            "participantes__padrino",
+            "personas",
         )
         estado = self.request.query_params.get("estado")
         q = self.request.query_params.get("q")
@@ -291,6 +300,20 @@ class ActividadViewSet(viewsets.ModelViewSet):
         if q:
             qs = qs.filter(Q(nombre__icontains=q) | Q(descripcion__icontains=q))
         return qs
+
+    @action(detail=True, methods=["get"])
+    def control(self, request, pk=None):
+        actividad = self.get_object()
+        ref = None
+        raw = request.query_params.get("fecha")
+        if raw:
+            from datetime import date as date_cls
+
+            try:
+                ref = date_cls.fromisoformat(str(raw)[:10])
+            except ValueError:
+                raise ValidationError("La fecha no es válida. Use AAAA-MM-DD.")
+        return Response(control_actividad(actividad, ref=ref))
 
 
 class RecaudoViewSet(viewsets.ReadOnlyModelViewSet):
@@ -448,7 +471,8 @@ def informes_view(request):
 def consultas_export(request):
     qs = filtrar_recaudos(request.query_params)
     data = informe(request.query_params, paginar_pendientes=False)
-    content = exportar_consultas(qs[:5000], data)
+    base_url = request.build_absolute_uri("/").rstrip("/")
+    content = exportar_consultas(qs[:5000], data, base_url=base_url)
     response = HttpResponse(
         content,
         content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

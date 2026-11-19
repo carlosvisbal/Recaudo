@@ -17,7 +17,7 @@ const VISTAS = [
   { id: "padrino", label: "Por padrino" },
   { id: "fecha", label: "Por fecha" },
   { id: "cruzado", label: "Padrino × actividad" },
-  { id: "pendientes", label: "Pendientes" },
+  { id: "pendientes", label: "Faltan por pagar" },
   { id: "pagos", label: "Pagos" },
 ] as const;
 
@@ -103,12 +103,12 @@ export function Consultas() {
           <div className="eyebrow">Reportes</div>
           <h1>Informes</h1>
           <p className="muted">
-            Totales por actividad, padrino y fecha. Pendientes: familias activas sin pago confirmado, por padrino y
-            actividad.
+            Totales y quiénes faltan por pagar en el mes o la quincena de cada actividad. El Excel incluye el enlace al
+            comprobante.
           </p>
         </div>
         <a className="btn secondary" href={`/api/informes/exportar/?${query()}`}>
-          Exportar Excel
+          Descargar reporte
         </a>
       </div>
 
@@ -138,10 +138,10 @@ export function Consultas() {
           <div className="kpi">{informe?.cantidad_confirmados ?? 0}</div>
         </div>
         <div className="card">
-          <div className="muted">Pendientes</div>
+          <div className="muted">Faltan por pagar</div>
           <div className="kpi">{pendientes?.count ?? 0}</div>
           <p className="muted" style={{ margin: "6px 0 0" }}>
-            {pendientes?.familias_al_dia ?? 0} familia(s) al día de {pendientes?.familias_asignadas ?? 0}
+            {pendientes?.familias_al_dia ?? 0} al día de {pendientes?.familias_asignadas ?? 0} en actividades
           </p>
         </div>
       </div>
@@ -281,7 +281,7 @@ export function Consultas() {
                   <div>{row.total_formato || cop(row.total)}</div>
                   <div className="muted">{row.cantidad} pagos</div>
                   {row.familias_pendientes ? (
-                    <span className="badge warning">{row.familias_pendientes} pendientes</span>
+                    <span className="badge warning">{row.familias_pendientes} faltan</span>
                   ) : (
                     <span className="badge activo">Al día</span>
                   )}
@@ -303,7 +303,7 @@ export function Consultas() {
       {vista === "pendientes" ? (
         <>
           <p className="muted">
-            Familias activas sin recaudo confirmado en la actividad. Toque Registrar para cargar el pago.
+            Familias de cada actividad que aún no pagaron en el mes o la quincena. Toque Registrar para cargar el pago.
           </p>
           <div className="list">
             {(pendientes?.results || []).map((row) => (
@@ -324,14 +324,14 @@ export function Consultas() {
               </div>
             ))}
             {!pendientes?.count ? (
-              <p className="muted">No hay pendientes de pago con este filtro.</p>
+              <p className="muted">Nadie falta por pagar con este filtro.</p>
             ) : null}
           </div>
           <Pager
             page={pagPend}
             pages={pendientes?.pages || 1}
             count={pendientes?.count || 0}
-            label="pendientes"
+            label="familias"
             onChange={(p) => void consultar(p, page)}
           />
         </>

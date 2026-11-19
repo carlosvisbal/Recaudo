@@ -351,11 +351,19 @@ def test_listas_vienen_paginadas(api, catalogo):
 
 
 def test_informes_por_actividad_padrino_fecha_y_pendientes(api, catalogo):
+    from operacion.models import ActividadParticipante
+
     otra_familia = Familia.objects.create(
         nombre="Familia López",
         padrino=catalogo["padrino"],
         telefono="3001112233",
     )
+    for fam in (catalogo["familia"], otra_familia):
+        ActividadParticipante.objects.create(
+            actividad=catalogo["actividad"],
+            familia=fam,
+            padrino=catalogo["padrino"],
+        )
     api.post(
         "/api/recaudos/",
         {
@@ -370,7 +378,11 @@ def test_informes_por_actividad_padrino_fecha_y_pendientes(api, catalogo):
     )
     response = api.get(
         "/api/informes/",
-        {"actividad": str(catalogo["actividad"].id), "padrino": str(catalogo["padrino"].id)},
+        {
+            "actividad": str(catalogo["actividad"].id),
+            "padrino": str(catalogo["padrino"].id),
+            "fecha_final": "2026-11-18",
+        },
     )
     assert response.status_code == 200, response.content
     data = response.json()
@@ -449,11 +461,14 @@ def test_crud_padrino_familia_actividad(api, catalogo):
             "fecha_inicio": "2026-01-01",
             "fecha_fin": "2026-01-31",
             "estado": "activa",
+            "cobro_cada": "mes",
+            "familias": [],
         },
         format="json",
     )
     assert actividad.status_code == 201
     aid = actividad.json()["id"]
+    assert actividad.json()["cobro_cada"] == "mes"
     act_edit = api.put(
         f"/api/actividades/{aid}/",
         {
@@ -462,10 +477,13 @@ def test_crud_padrino_familia_actividad(api, catalogo):
             "fecha_inicio": "2026-01-01",
             "fecha_fin": "2026-01-31",
             "estado": "activa",
+            "cobro_cada": "quincena",
+            "familias": [],
         },
         format="json",
     )
     assert act_edit.json()["nombre"] == "Kermés 2026"
+    assert act_edit.json()["cobro_cada"] == "quincena"
     assert api.delete(f"/api/actividades/{aid}/").status_code == 204
     assert api.delete(f"/api/padrinos/{pid}/").status_code == 204
 
@@ -540,3 +558,200 @@ def test_no_elimina_padrino_con_pagos(api, catalogo):
     response = api.delete(f"/api/padrinos/{catalogo['padrino'].id}/")
     assert response.status_code == 400
     assert Padrino.objects.filter(pk=catalogo["padrino"].id).exists()
+
+
+def test_actividad_con_familias_y_control_periodo(api, catalogo):
+    otra = Familia.objects.create(nombre="Familia Ríos", padrino=catalogo["padrino"])
+    creada = api.post(
+        "/api/actividades/",
+        {
+            "nombre": "Mercado quincenal",
+            "fecha_inicio": "2026-11-01",
+            "fecha_fin": "2026-12-31",
+            "estado": "activa",
+            "cobro_cada": "quincena",
+            "familias": [str(catalogo["familia"].id), str(otra.id)],
+        },
+        format="json",
+    )
+    assert creada.status_code == 201, creada.content
+    data = creada.json()
+    assert data["cobro_cada"] == "quincena"
+    assert data["cantidad_familias"] == 2
+    assert len(data["participantes"]) == 2
+
+    aid = data["id"]
+    api.post(
+        "/api/recaudos/",
+        {
+            "actividad": aid,
+            "padrino": str(catalogo["padrino"].id),
+            "familia": str(catalogo["familia"].id),
+            "valor": "10000",
+            "medio_pago": "efectivo",
+            "fecha": "2026-11-10",
+        },
+        format="multipart",
+    )
+    control = api.get(f"/api/actividades/{aid}/control/", {"fecha": "2026-11-10"})
+    assert control.status_code == 200
+    body = control.json()
+    assert body["cantidad_pagaron"] == 1
+    assert body["cantidad_faltan"] == 1
+    assert body["faltan"][0]["familia_id"] == str(otra.id)
+
+
+def test_soporte_se_guarda_con_id_unico(api, catalogo):
+    png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 20
+    soporte = SimpleUploadedFile("comprobante-banco.png", png, content_type="image/png")
+    creado = api.post(
+        "/api/recaudos/",
+        {
+            "actividad": str(catalogo["actividad"].id),
+            "padrino": str(catalogo["padrino"].id),
+            "familia": str(catalogo["familia"].id),
+            "valor": "15000",
+            "medio_pago": "transferencia",
+            "soportes": soporte,
+        },
+        format="multipart",
+    )
+    assert creado.status_code == 201, creado.content
+    from operacion.models import Soporte
+
+    row = Soporte.objects.get()
+    assert row.nombre_original.endswith(".png")
+    assert str(row.id) in row.archivo.name
+    assert "comprobante-banco" not in row.archivo.name
+
+
+def test_pago_agrega_familia_a_actividad_si_faltaba(api, catalogo):
+    from operacion.models import ActividadParticipante
+
+    assert ActividadParticipante.objects.count() == 0
+    api.post(
+        "/api/recaudos/",
+        {
+            "actividad": str(catalogo["actividad"].id),
+            "padrino": str(catalogo["padrino"].id),
+            "familia": str(catalogo["familia"].id),
+            "valor": "8000",
+            "medio_pago": "efectivo",
+            "fecha": "2026-11-12",
+        },
+        format="multipart",
+    )
+    assert ActividadParticipante.objects.filter(
+        actividad=catalogo["actividad"], familia=catalogo["familia"]
+    ).exists()
+
+
+def test_control_marca_ya_pago_para_evitar_duplicado(api, catalogo):
+    from operacion.models import ActividadParticipante
+
+    ActividadParticipante.objects.create(
+        actividad=catalogo["actividad"],
+        familia=catalogo["familia"],
+        padrino=catalogo["padrino"],
+    )
+    api.post(
+        "/api/recaudos/",
+        {
+            "actividad": str(catalogo["actividad"].id),
+            "padrino": str(catalogo["padrino"].id),
+            "familia": str(catalogo["familia"].id),
+            "valor": "9000",
+            "medio_pago": "efectivo",
+            "fecha": "2026-11-12",
+        },
+        format="multipart",
+    )
+    control = api.get(
+        f"/api/actividades/{catalogo['actividad'].id}/control/",
+        {"fecha": "2026-11-12"},
+    )
+    assert control.status_code == 200
+    body = control.json()
+    assert body["cantidad_pagaron"] == 1
+    assert body["pagaron"][0]["familia_id"] == str(catalogo["familia"].id)
+
+
+def test_actividad_general_personas_un_solo_pago(api, catalogo):
+    creada = api.post(
+        "/api/actividades/",
+        {
+            "nombre": "Rifa comunitaria",
+            "fecha_inicio": "2026-11-01",
+            "fecha_fin": "2026-12-31",
+            "estado": "activa",
+            "tipo": "general",
+            "cobro_cada": "una_vez",
+            "personas_data": [
+                {"nombre": "María López", "telefono": "3001112222"},
+                {"nombre": "Pedro Ruiz", "telefono": "3003334444"},
+            ],
+            "familias": [],
+        },
+        format="json",
+    )
+    assert creada.status_code == 201, creada.content
+    data = creada.json()
+    assert data["tipo"] == "general"
+    assert data["cobro_cada"] == "una_vez"
+    assert data["cantidad_personas"] == 2
+    persona_id = data["personas"][0]["id"]
+
+    pago = api.post(
+        "/api/recaudos/",
+        {
+            "actividad": data["id"],
+            "persona": persona_id,
+            "valor": "20000",
+            "medio_pago": "efectivo",
+            "fecha": "2026-11-15",
+        },
+        format="multipart",
+    )
+    assert pago.status_code == 201, pago.content
+    assert pago.json()["aportante_nombre"] == "María López"
+    assert pago.json()["padrino"] is None
+
+    control = api.get(f"/api/actividades/{data['id']}/control/", {"fecha": "2026-11-15"})
+    body = control.json()
+    assert body["cantidad_pagaron"] == 1
+    assert body["cantidad_faltan"] == 1
+    assert body["pagaron"][0]["persona_id"] == persona_id
+
+
+def test_excel_incluye_enlace_soporte(api, catalogo):
+    png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 20
+    soporte = SimpleUploadedFile("pago.png", png, content_type="image/png")
+    creado = api.post(
+        "/api/recaudos/",
+        {
+            "actividad": str(catalogo["actividad"].id),
+            "padrino": str(catalogo["padrino"].id),
+            "familia": str(catalogo["familia"].id),
+            "valor": "15000",
+            "medio_pago": "transferencia",
+            "soportes": soporte,
+        },
+        format="multipart",
+    )
+    recaudo_id = creado.json()["id"]
+    soporte_id = creado.json()["soportes"][0]["id"]
+    response = api.get("/api/informes/exportar/")
+    assert response.status_code == 200
+    from io import BytesIO
+
+    from openpyxl import load_workbook
+
+    wb = load_workbook(BytesIO(response.content))
+    ws = wb["Recaudos"]
+    headers = [cell.value for cell in ws[1]]
+    assert "Enlace soporte" in headers
+    col = headers.index("Enlace soporte") + 1
+    link = ws.cell(row=2, column=col).value or ""
+    assert str(recaudo_id) in link
+    assert str(soporte_id) in link
+    assert "/soportes/" in link

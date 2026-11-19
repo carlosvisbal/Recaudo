@@ -2,6 +2,8 @@ from django.contrib import admin
 
 from .models import (
     Actividad,
+    ActividadParticipante,
+    ActividadPersona,
     AsignacionFamiliaHistorial,
     Auditoria,
     EnvioCorreo,
@@ -65,11 +67,38 @@ class AsignacionAdmin(admin.ModelAdmin):
     )
 
 
+class ActividadParticipanteInline(admin.TabularInline):
+    model = ActividadParticipante
+    extra = 0
+    raw_id_fields = ("familia", "padrino")
+
+
+class ActividadPersonaInline(admin.TabularInline):
+    model = ActividadPersona
+    extra = 0
+
+
 @admin.register(Actividad)
 class ActividadAdmin(admin.ModelAdmin):
-    list_display = ("nombre", "fecha_inicio", "fecha_fin", "estado", "creado_en")
+    list_display = (
+        "nombre",
+        "tipo",
+        "cobro_cada",
+        "fecha_inicio",
+        "fecha_fin",
+        "estado",
+        "creado_en",
+    )
     search_fields = ("nombre",)
-    list_filter = ("estado",)
+    list_filter = ("estado", "tipo", "cobro_cada")
+    inlines = [ActividadParticipanteInline, ActividadPersonaInline]
+
+
+@admin.register(ActividadParticipante)
+class ActividadParticipanteAdmin(admin.ModelAdmin):
+    list_display = ("actividad", "padrino", "familia", "creado_en")
+    search_fields = ("actividad__nombre", "familia__nombre", "padrino__nombre_completo")
+    raw_id_fields = ("actividad", "familia", "padrino")
 
 
 class SoporteInline(admin.TabularInline):

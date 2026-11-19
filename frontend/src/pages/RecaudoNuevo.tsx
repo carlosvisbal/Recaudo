@@ -1,10 +1,35 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { api, ApiError, cop, parsePage, type Actividad, type Familia, type Padrino, type Recaudo } from "../api";
+import {
+  api,
+  ApiError,
+  cop,
+  parsePage,
+  type Actividad,
+  type ActividadControl,
+  type Familia,
+  type Padrino,
+  type Recaudo,
+} from "../api";
 import { FilterSelect } from "../components/FilterSelect";
-import { Pager } from "../components/Pager";
 
 const MAX_SOPORTE_BYTES = 5 * 1024 * 1024;
+
+type FilaParticipante = {
+  key: string;
+  nombre: string;
+  telefono: string;
+  ya_pago: boolean;
+  familia_id?: string;
+  padrino_id?: string;
+  padrino_nombre?: string;
+  persona_id?: string;
+};
+
+function tipoDeActividad(lista: Actividad[], idAct: string): "apadrinamiento" | "general" {
+  const found = lista.find((a) => a.id === idAct);
+  return found?.tipo === "general" ? "general" : "apadrinamiento";
+}
 
 function today() {
   return new Date().toISOString().slice(0, 10);
@@ -35,18 +60,18 @@ export function RecaudoNuevo() {
   const navigate = useNavigate();
   const [params] = useSearchParams();
   const [soportesExistentes, setSoportesExistentes] = useState(0);
-  const [familiasPadrino, setFamiliasPadrino] = useState<Familia[]>([]);
-  const [cargandoFamilias, setCargandoFamilias] = useState(false);
-  const [paginaFamilia, setPaginaFamilia] = useState(1);
-  const [pagesFamilia, setPagesFamilia] = useState(1);
-  const [countFamilia, setCountFamilia] = useState(0);
-  const [qFamilia, setQFamilia] = useState("");
   const [familia, setFamilia] = useState<Familia | null>(null);
+  const [personaId, setPersonaId] = useState(params.get("persona") || "");
+  const [personaNombre, setPersonaNombre] = useState("");
   const [actividades, setActividades] = useState<Actividad[]>([]);
   const [filtroActividad, setFiltroActividad] = useState("");
   const [padrinos, setPadrinos] = useState<Padrino[]>([]);
   const [actividad, setActividad] = useState(params.get("actividad") || "");
   const [padrino, setPadrino] = useState(params.get("padrino") || "");
+  const [control, setControl] = useState<ActividadControl | null>(null);
+  const [cargandoControl, setCargandoControl] = useState(false);
+  const [qFamilia, setQFamilia] = useState("");
+  const [filtroEstado, setFiltroEstado] = useState<"todas" | "faltan" | "pagaron">("faltan");
   const [fecha, setFecha] = useState(today());
   const [valor, setValor] = useState("");
   const [medio, setMedio] = useState<"efectivo" | "transferencia">("efectivo");
@@ -57,47 +82,45 @@ export function RecaudoNuevo() {
   const [busy, setBusy] = useState(false);
   const [confirmar, setConfirmar] = useState(false);
   const [crearFamilia, setCrearFamilia] = useState(false);
-  const [nuevaFamilia, setNuevaFamilia] = useState({ nombre: "", telefono: "" });
+  const [nuevaFamilia, setNuevaFamilia] = useState({ nombre: "", telefono: "", padrino: "" });
   const [guardandoFamilia, setGuardandoFamilia] = useState(false);
   const [errorFamilia, setErrorFamilia] = useState("");
 
   const loadActividades = useCallback(async (term = "") => {
-    const params = new URLSearchParams({ page: "1" });
-    if (term.trim()) params.set("q", term.trim());
-    const data = parsePage<Actividad>(await api(`/api/actividades/?${params}`));
+    const query = new URLSearchParams({ page: "1", page_size: "50" });
+    if (term.trim()) query.set("q", term.trim());
+    const data = parsePage<Actividad>(await api(`/api/actividades/?${query}`));
     setActividades(data.results.filter((a) => a.estado !== "cerrada"));
   }, []);
 
   const loadPadrinos = useCallback(async (term = "") => {
-    const params = new URLSearchParams({ estado: "activo", page: "1" });
-    if (term.trim()) params.set("q", term.trim());
-    setPadrinos(parsePage<Padrino>(await api(`/api/padrinos/?${params}`)).results);
+    const query = new URLSearchParams({ estado: "activo", page: "1", page_size: "50" });
+    if (term.trim()) query.set("q", term.trim());
+    setPadrinos(parsePage<Padrino>(await api(`/api/padrinos/?${query}`)).results);
   }, []);
 
-  const loadFamilias = useCallback(async (padrinoId: string, term = "", pagina = 1) => {
-    const params = new URLSearchParams({
-      padrino: padrinoId,
-      estado: "activo",
-      page: String(pagina),
-    });
-    if (term.trim()) params.set("q", term.trim());
-    const data = parsePage<Familia>(await api(`/api/familias/?${params}`));
-    setFamiliasPadrino(data.results);
-    setPagesFamilia(data.pages);
-    setCountFamilia(data.count);
-    setPaginaFamilia(data.page);
-    setCargandoFamilias(false);
-    setFamilia((actual) => {
-      if (!actual) return null;
-      if (data.results.some((item) => item.id === actual.id)) return actual;
-      return actual.padrino === padrinoId ? actual : null;
-    });
-  }, []);
+  const loadControl = useCallback(async (actividadId: string, fechaRef = fecha) => {
+    if (!actividadId) {
+      setControl(null);
+      return;
+    }
+    setCargandoControl(true);
+    try {
+      const query = new URLSearchParams();
+      if (fechaRef) query.set("fecha", fechaRef);
+      const data = await api<ActividadControl>(`/api/actividades/${actividadId}/control/?${query}`);
+      setControl(data);
+    } catch {
+      setControl(null);
+    } finally {
+      setCargandoControl(false);
+    }
+  }, [fecha]);
 
   useEffect(() => {
     void loadActividades();
     void loadPadrinos();
-  }, []);
+  }, [loadActividades, loadPadrinos]);
 
   useEffect(() => {
     if (!id) return;
@@ -121,20 +144,7 @@ export function RecaudoNuevo() {
                 fecha_inicio: "",
                 fecha_fin: "",
                 estado: "activa",
-              },
-              ...actual,
-            ]
-      );
-      setPadrinos((actual) =>
-        actual.some((p) => p.id === item.padrino)
-          ? actual
-          : [
-              {
-                id: item.padrino,
-                nombre_completo: item.padrino_nombre,
-                telefono: "",
-                correo: "",
-                estado: "activo",
+                cobro_cada: "mes",
               },
               ...actual,
             ]
@@ -147,25 +157,12 @@ export function RecaudoNuevo() {
 
   useEffect(() => {
     const familiaId = params.get("familia");
-    if (!familiaId) return;
-    void api<Familia>(`/api/familias/${familiaId}/`).then((item) => {
-      setFamilia(item);
-      setPadrino(item.padrino);
-      setPadrinos((actual) =>
-        actual.some((p) => p.id === item.padrino)
-          ? actual
-          : [
-              {
-                id: item.padrino,
-                nombre_completo: item.padrino_nombre,
-                telefono: item.telefono || "",
-                correo: "",
-                estado: "activo",
-              },
-              ...actual,
-            ]
-      );
-    });
+    if (familiaId) {
+      void api<Familia>(`/api/familias/${familiaId}/`).then((item) => {
+        setFamilia(item);
+        setPadrino(item.padrino);
+      });
+    }
     const actId = params.get("actividad");
     if (actId) {
       void api<Actividad>(`/api/actividades/${actId}/`).then((item) => {
@@ -176,21 +173,21 @@ export function RecaudoNuevo() {
   }, [params]);
 
   useEffect(() => {
-    if (!padrino) {
-      setFamiliasPadrino([]);
-      setCargandoFamilias(false);
-      setCountFamilia(0);
+    if (!actividad) {
+      setControl(null);
       return;
     }
-    setCargandoFamilias(true);
-    setQFamilia("");
-    void loadFamilias(padrino, "", 1);
-  }, [padrino]);
+    void loadControl(actividad, fecha);
+  }, [actividad, fecha, loadControl]);
 
   const valorOk = useMemo(() => parseValor(valor), [valor]);
   const actividadActual =
     actividades.find((a) => a.id === actividad) ||
     (actividad ? ({ id: actividad, nombre: "Actividad seleccionada" } as Actividad) : undefined);
+  const esGeneral =
+    control?.tipo === "general" ||
+    actividadActual?.tipo === "general" ||
+    tipoDeActividad(actividades, actividad) === "general";
   const padrinoActual = padrinos.find((item) => item.id === padrino);
   const yaRecaudado = Number(actividadActual?.total_recaudado || 0);
   const nuevoTotal = yaRecaudado + Number(valorOk || 0);
@@ -213,19 +210,105 @@ export function RecaudoNuevo() {
     return actividades.filter((item) => item.nombre.toLowerCase().includes(term)).length;
   }, [actividades, filtroActividad]);
 
+  const filas = useMemo<FilaParticipante[]>(() => {
+    if (!control) return [];
+    const mapRow = (row: ActividadControl["pagaron"][number], ya_pago: boolean): FilaParticipante => {
+      if (row.persona_id) {
+        return {
+          key: row.persona_id,
+          nombre: row.persona_nombre || "",
+          telefono: row.telefono || "",
+          ya_pago,
+          persona_id: row.persona_id,
+        };
+      }
+      return {
+        key: row.familia_id || "",
+        nombre: row.familia_nombre || "",
+        telefono: row.telefono || "",
+        ya_pago,
+        familia_id: row.familia_id,
+        padrino_id: row.padrino_id,
+        padrino_nombre: row.padrino_nombre,
+      };
+    };
+    return [
+      ...control.faltan.map((row) => mapRow(row, false)),
+      ...control.pagaron.map((row) => mapRow(row, true)),
+    ];
+  }, [control]);
+
+  const filasVisibles = useMemo(() => {
+    const term = qFamilia.trim().toLowerCase();
+    return filas.filter((row) => {
+      if (filtroEstado === "faltan" && row.ya_pago) return false;
+      if (filtroEstado === "pagaron" && !row.ya_pago) return false;
+      if (!esGeneral && padrino && row.padrino_id !== padrino) return false;
+      if (!term) return true;
+      return (
+        row.nombre.toLowerCase().includes(term) ||
+        (row.padrino_nombre || "").toLowerCase().includes(term) ||
+        row.telefono.includes(term)
+      );
+    });
+  }, [filas, filtroEstado, qFamilia, padrino, esGeneral]);
+
+  const yaPagoSeleccionado = useMemo(() => {
+    if (!control || id) return false;
+    if (esGeneral && personaId) {
+      return control.pagaron.some((row) => row.persona_id === personaId);
+    }
+    if (familia) {
+      return control.pagaron.some((row) => row.familia_id === familia.id);
+    }
+    return false;
+  }, [control, id, esGeneral, personaId, familia]);
+
+  function elegirParticipante(row: FilaParticipante) {
+    setError("");
+    if (row.persona_id) {
+      setPersonaId(row.persona_id);
+      setPersonaNombre(row.nombre);
+      setFamilia(null);
+      setPadrino("");
+      return;
+    }
+    setPersonaId("");
+    setPersonaNombre("");
+    setFamilia({
+      id: row.familia_id || "",
+      nombre: row.nombre,
+      contacto_principal: "",
+      telefono: row.telefono,
+      correo: "",
+      padrino: row.padrino_id || "",
+      padrino_nombre: row.padrino_nombre || "",
+      observaciones: "",
+      estado: "activo",
+    });
+    setPadrino(row.padrino_id || "");
+  }
+
   function validar(): boolean {
     setError("");
     if (!actividad) {
       setError("Seleccione arriba la actividad en la que registra este recaudo.");
       return false;
     }
-    if (!padrino) {
-      setError("Elija el padrino a quien se evidencia el pago.");
-      return false;
-    }
-    if (!familia) {
-      setError("Elija la familia que está realizando el pago.");
-      return false;
+    if (esGeneral) {
+      if (!personaId) {
+        setError("Toque la persona que está pagando.");
+        return false;
+      }
+    } else {
+      if (!familia) {
+        setError("Toque la familia que está pagando.");
+        return false;
+      }
+      if (!padrino) {
+        setError("Falta el padrino de esa familia.");
+        return false;
+      }
     }
     if (!valorOk) {
       setError("Indique el valor recibido.");
@@ -244,20 +327,27 @@ export function RecaudoNuevo() {
   }
 
   async function guardar() {
-    if (!familia || !valorOk) return;
+    if (!valorOk) return;
+    if (esGeneral && !personaId) return;
+    if (!esGeneral && !familia) return;
     setBusy(true);
     setError("");
     try {
       const body = new FormData();
       body.append("fecha", fecha);
       body.append("actividad", actividad);
-      body.append("padrino", padrino);
-      body.append("familia", familia.id);
-      body.append("aportante_nombre", familia.nombre);
       body.append("valor", valorOk);
       body.append("medio_pago", medio);
       body.append("concepto", concepto);
       body.append("referencia_consignacion", referencia);
+      if (esGeneral) {
+        body.append("persona", personaId);
+        body.append("aportante_nombre", personaNombre);
+      } else if (familia) {
+        body.append("padrino", padrino);
+        body.append("familia", familia.id);
+        body.append("aportante_nombre", familia.nombre);
+      }
       if (medio === "transferencia") {
         files.forEach((file) => body.append("soportes", file));
       }
@@ -286,8 +376,8 @@ export function RecaudoNuevo() {
         <div className="eyebrow">{id ? "Edición de recaudo" : "Registro de recaudo"}</div>
         <h1>{id ? "Editar pago" : "Registrar pago"}</h1>
         <p className="muted">
-          Primero elija la actividad. Luego indique quién paga (la familia) y a quién se evidencia (el padrino). Antes
-          de guardar verá una confirmación.
+          Elija la actividad, toque la familia y digite el valor. Si esa familia ya pagó en el mes o la quincena, se lo
+          avisamos para que no duplique.
         </p>
       </div>
 
@@ -317,7 +407,14 @@ export function RecaudoNuevo() {
                 hint: `${cop(item.total_recaudado)} · ${item.cantidad_recaudos || 0} pagos · ${item.estado}`,
               }))}
               onSearch={(term) => void loadActividades(term)}
-              onChange={setActividad}
+              onChange={(value) => {
+                setActividad(value);
+                setFamilia(null);
+                setPersonaId("");
+                setPersonaNombre("");
+                setPadrino("");
+                setFiltroEstado("faltan");
+              }}
             />
             {atajosActividad.length ? (
               <>
@@ -328,7 +425,14 @@ export function RecaudoNuevo() {
                       type="button"
                       key={item.id}
                       className={actividad === item.id ? "chip on" : "chip"}
-                      onClick={() => setActividad(item.id)}
+                      onClick={() => {
+                        setActividad(item.id);
+                        setFamilia(null);
+                        setPersonaId("");
+                        setPersonaNombre("");
+                        setPadrino("");
+                        setFiltroEstado("faltan");
+                      }}
                     >
                       {item.nombre}
                     </button>
@@ -355,7 +459,14 @@ export function RecaudoNuevo() {
                   type="button"
                   key={item.id}
                   className={actividad === item.id ? "activity-card on" : "activity-card"}
-                  onClick={() => setActividad(item.id)}
+                  onClick={() => {
+                    setActividad(item.id);
+                    setFamilia(null);
+                    setPersonaId("");
+                    setPersonaNombre("");
+                    setPadrino("");
+                    setFiltroEstado("faltan");
+                  }}
                 >
                   <div className="card-top">
                     <strong>{item.nombre}</strong>
@@ -404,14 +515,24 @@ export function RecaudoNuevo() {
         </div>
         <div>
           <div className="kicker">Quién realiza el pago</div>
-          <strong>{familia?.nombre || "Elija la familia"}</strong>
-          <div className="muted">{familia?.telefono ? `Celular ${familia.telefono}` : "Familia aportante"}</div>
+          <strong>
+            {esGeneral ? personaNombre || "Elija la persona" : familia?.nombre || "Elija la familia"}
+          </strong>
+          <div className="muted">
+            {esGeneral
+              ? "Persona de la actividad"
+              : familia?.telefono
+                ? `Celular ${familia.telefono}`
+                : "Familia aportante"}
+          </div>
         </div>
-        <div>
-          <div className="kicker">A quién se evidencia</div>
-          <strong>{padrinoActual?.nombre_completo || "Elija el padrino"}</strong>
-          <div className="muted">Padrino que recibe</div>
-        </div>
+        {!esGeneral ? (
+          <div>
+            <div className="kicker">A quién se evidencia</div>
+            <strong>{padrinoActual?.nombre_completo || "Elija el padrino"}</strong>
+            <div className="muted">Padrino que recibe</div>
+          </div>
+        ) : null}
       </div>
 
       {error ? <div className="error">{error}</div> : null}
@@ -420,101 +541,147 @@ export function RecaudoNuevo() {
         <div className="form-step">
           <span className="step-num">2</span>
           <div>
-            <h2>¿Quién paga y a quién se evidencia?</h2>
-            <p className="muted">Filtre el padrino. Solo verá las familias asignadas a él.</p>
+            <h2>¿Quién paga?</h2>
+            <p className="muted">
+              {control
+                ? `${control.etiqueta_periodo}. Toque ${esGeneral ? "la persona" : "la familia"}. Quien ya pagó se marca.`
+                : "Primero elija la actividad."}
+            </p>
           </div>
         </div>
-        <FilterSelect
-          label="Padrino a quien se evidencia (recibe el pago)"
-          required
-          value={padrino}
-          placeholder="Escriba el nombre del padrino"
-          emptyLabel="Seleccione el padrino"
-          options={padrinos.map((item) => ({
-            value: item.id,
-            label: item.nombre_completo,
-            hint:
-              typeof item.familias_activas === "number"
-                ? `${item.familias_activas} familia(s) asignada(s)`
-                : item.telefono,
-          }))}
-          onSearch={(term) => void loadPadrinos(term)}
-          onChange={(value) => {
-            setPadrino(value);
-            setFamilia(null);
-            setCrearFamilia(false);
-            setNuevaFamilia({ nombre: "", telefono: "" });
-            setErrorFamilia("");
-          }}
-        />
 
-        {!padrino ? (
-          <p className="muted">Elija un padrino para listar solo las familias que tiene asignadas.</p>
-        ) : cargandoFamilias ? (
-          <p className="muted">Cargando familias de {padrinoActual?.nombre_completo || "este padrino"}…</p>
+        {!actividad ? (
+          <p className="muted">Elija la actividad arriba para ver quiénes faltan por pagar.</p>
+        ) : cargandoControl ? (
+          <p className="muted">Cargando participantes…</p>
         ) : (
           <>
-            <FilterSelect
-              label="Familia que realiza el pago"
-              required
-              value={familia?.id || ""}
-              placeholder="Escriba para filtrar las familias de este padrino"
-              emptyLabel="Seleccione la familia"
-              options={familiasPadrino.map((item) => ({
-                value: item.id,
-                label: item.nombre,
-                hint: item.telefono ? `WhatsApp ${item.telefono}` : "Sin celular para el recibo",
-              }))}
-              onSearch={(term) => {
-                setQFamilia(term);
-                void loadFamilias(padrino, term, 1);
-              }}
-              onChange={(value) => {
-                setFamilia(familiasPadrino.find((item) => item.id === value) || familia);
-              }}
-            />
-            <div className="pick-list">
-              {familiasPadrino.map((item) => (
-                <button
-                  type="button"
-                  key={item.id}
-                  className={familia?.id === item.id ? "pick-item on" : "pick-item"}
-                  onClick={() => setFamilia(item)}
-                >
-                  <div>
-                    <strong>{item.nombre}</strong>
-                    <div className="muted">
-                      {item.telefono ? `WhatsApp ${item.telefono}` : "Sin celular para el recibo"}
-                    </div>
-                  </div>
-                  {familia?.id === item.id ? <span className="badge activo">Paga</span> : null}
-                </button>
-              ))}
+            <div className="choice-row" role="group" aria-label="Filtrar">
+              <button
+                type="button"
+                className={`choice-btn ${filtroEstado === "faltan" ? "on" : ""}`}
+                onClick={() => setFiltroEstado("faltan")}
+              >
+                Faltan ({control?.cantidad_faltan ?? 0})
+              </button>
+              <button
+                type="button"
+                className={`choice-btn ${filtroEstado === "pagaron" ? "on" : ""}`}
+                onClick={() => setFiltroEstado("pagaron")}
+              >
+                Ya pagaron ({control?.cantidad_pagaron ?? 0})
+              </button>
+              <button
+                type="button"
+                className={`choice-btn ${filtroEstado === "todas" ? "on" : ""}`}
+                onClick={() => setFiltroEstado("todas")}
+              >
+                Todas (
+                {esGeneral
+                  ? (control?.cantidad_personas ?? control?.cantidad_familias ?? 0)
+                  : (control?.cantidad_familias ?? 0)}
+                )
+              </button>
             </div>
-            <Pager
-              page={paginaFamilia}
-              pages={pagesFamilia}
-              count={countFamilia}
-              label="familias"
-              onChange={(p) => void loadFamilias(padrino, qFamilia, p)}
-            />
-            {!familiasPadrino.length ? (
-              <p className="muted">Este padrino no tiene familias activas. Créela aquí mismo.</p>
+
+            <label>
+              Buscar
+              <input
+                placeholder={esGeneral ? "Nombre o celular" : "Nombre, padrino o celular"}
+                value={qFamilia}
+                onChange={(e) => setQFamilia(e.target.value)}
+              />
+            </label>
+
+            {!esGeneral ? (
+              <FilterSelect
+                label="Filtrar por padrino (opcional)"
+                value={padrino}
+                placeholder="Todos los padrinos de la actividad"
+                emptyLabel="Todos los padrinos"
+                options={Array.from(
+                  new Map(
+                    filas
+                      .filter((row) => row.padrino_id)
+                      .map((row) => [
+                        row.padrino_id!,
+                        { value: row.padrino_id!, label: row.padrino_nombre || "" },
+                      ])
+                  ).values()
+                )}
+                onChange={(value) => {
+                  setPadrino(value);
+                  if (familia && value && familia.padrino !== value) setFamilia(null);
+                }}
+              />
             ) : null}
+
+            {yaPagoSeleccionado ? (
+              <div className="warn-banner">
+                <strong>{esGeneral ? personaNombre : familia?.nombre}</strong> ya pagó{" "}
+                {control?.etiqueta_periodo.toLowerCase() || "en este período"}. Si continúa, se registrará{" "}
+                <strong>otro pago</strong> (posible duplicado).
+              </div>
+            ) : null}
+
+            <div className="pick-list">
+              {filasVisibles.map((row) => {
+                const selected = esGeneral
+                  ? personaId === row.persona_id
+                  : familia?.id === row.familia_id;
+                return (
+                  <button
+                    type="button"
+                    key={row.key}
+                    className={selected ? "pick-item on" : "pick-item"}
+                    onClick={() => elegirParticipante(row)}
+                  >
+                    <div>
+                      <strong>{row.nombre}</strong>
+                      <div className="muted">
+                        {row.padrino_nombre || ""}
+                        {row.telefono ? `${row.padrino_nombre ? " · " : ""}${row.telefono}` : ""}
+                      </div>
+                    </div>
+                    {row.ya_pago ? (
+                      <span className="badge confirmado">Ya pagó</span>
+                    ) : selected ? (
+                      <span className="badge activo">Paga ahora</span>
+                    ) : (
+                      <span className="badge warning">Falta</span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+
+            {!filas.length ? (
+              <p className="muted">
+                Esta actividad aún no tiene {esGeneral ? "personas" : "familias"}. Agréguelas abajo o en{" "}
+                <Link to={`/actividades/${actividad}`}>la actividad</Link>.
+              </p>
+            ) : !filasVisibles.length ? (
+              <p className="muted">
+                {filtroEstado === "faltan"
+                  ? "Nadie falta por pagar en este tramo. Cambie a “Ya pagaron” o “Todas” si necesita otro pago."
+                  : "Nadie coincide con el filtro."}
+              </p>
+            ) : null}
+
             {crearFamilia ? (
               <div className="note" style={{ display: "grid", gap: 10 }}>
-                <strong>Nueva familia de {padrinoActual?.nombre_completo}</strong>
+                <strong>{esGeneral ? "Agregar persona" : "Agregar familia a esta actividad"}</strong>
                 {errorFamilia ? <div className="error">{errorFamilia}</div> : null}
                 <label>
-                  Nombre de la familia
+                  Nombre
                   <input
                     value={nuevaFamilia.nombre}
                     onChange={(e) => setNuevaFamilia({ ...nuevaFamilia, nombre: e.target.value })}
-                    placeholder="Apellido o identificación"
+                    placeholder={esGeneral ? "Nombre de la persona" : "Apellido o identificación"}
                   />
                 </label>
                 <label>
-                  Celular para WhatsApp (opcional)
+                  Celular (opcional)
                   <input
                     inputMode="tel"
                     placeholder="3001234567"
@@ -522,6 +689,21 @@ export function RecaudoNuevo() {
                     onChange={(e) => setNuevaFamilia({ ...nuevaFamilia, telefono: e.target.value })}
                   />
                 </label>
+                {!esGeneral ? (
+                  <label>
+                    Padrino
+                    <select
+                      value={nuevaFamilia.padrino || padrino || padrinos[0]?.id || ""}
+                      onChange={(e) => setNuevaFamilia({ ...nuevaFamilia, padrino: e.target.value })}
+                    >
+                      {padrinos.map((p) => (
+                        <option key={p.id} value={p.id}>
+                          {p.nombre_completo}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                ) : null}
                 <div className="actions">
                   <button
                     type="button"
@@ -530,31 +712,98 @@ export function RecaudoNuevo() {
                     onClick={async () => {
                       setErrorFamilia("");
                       if (!nuevaFamilia.nombre.trim()) {
-                        setErrorFamilia("Escriba el nombre de la familia.");
+                        setErrorFamilia("Escriba el nombre.");
+                        return;
+                      }
+                      if (!actividad) {
+                        setErrorFamilia("Elija primero la actividad.");
                         return;
                       }
                       setGuardandoFamilia(true);
                       try {
-                        const creada = await api<Familia>("/api/familias/", {
-                          method: "POST",
-                          body: JSON.stringify({
-                            nombre: nuevaFamilia.nombre.trim(),
-                            telefono: nuevaFamilia.telefono.trim(),
-                            padrino,
-                          }),
-                        });
-                        setFamilia(creada);
-                        void loadFamilias(padrino, "", 1);
+                        const act = await api<Actividad>(`/api/actividades/${actividad}/`);
+                        if (esGeneral || act.tipo === "general") {
+                          const personas_data = [
+                            ...(act.personas || []).map((p) => ({
+                              id: p.id,
+                              nombre: p.nombre,
+                              telefono: p.telefono || "",
+                            })),
+                            {
+                              nombre: nuevaFamilia.nombre.trim(),
+                              telefono: nuevaFamilia.telefono.trim(),
+                            },
+                          ];
+                          const actualizada = await api<Actividad>(`/api/actividades/${actividad}/`, {
+                            method: "PUT",
+                            body: JSON.stringify({
+                              nombre: act.nombre,
+                              descripcion: act.descripcion || "",
+                              fecha_inicio: act.fecha_inicio,
+                              fecha_fin: act.fecha_fin,
+                              estado: act.estado,
+                              tipo: "general",
+                              cobro_cada: act.cobro_cada || "una_vez",
+                              personas_data,
+                              familias: [],
+                            }),
+                          });
+                          const creada = (actualizada.personas || []).find(
+                            (p) =>
+                              p.nombre === nuevaFamilia.nombre.trim() &&
+                              (p.telefono || "") === nuevaFamilia.telefono.trim()
+                          );
+                          if (creada) {
+                            setPersonaId(creada.id);
+                            setPersonaNombre(creada.nombre);
+                          }
+                        } else {
+                          const padrinoId = nuevaFamilia.padrino || padrino || padrinos[0]?.id || "";
+                          if (!padrinoId) {
+                            setErrorFamilia("Elija el padrino.");
+                            return;
+                          }
+                          const creada = await api<Familia>("/api/familias/", {
+                            method: "POST",
+                            body: JSON.stringify({
+                              nombre: nuevaFamilia.nombre.trim(),
+                              telefono: nuevaFamilia.telefono.trim(),
+                              padrino: padrinoId,
+                            }),
+                          });
+                          const ids = [
+                            ...(act.participantes || []).map((p) => p.familia),
+                            creada.id,
+                          ];
+                          await api(`/api/actividades/${actividad}/`, {
+                            method: "PUT",
+                            body: JSON.stringify({
+                              nombre: act.nombre,
+                              descripcion: act.descripcion || "",
+                              fecha_inicio: act.fecha_inicio,
+                              fecha_fin: act.fecha_fin,
+                              estado: act.estado,
+                              tipo: act.tipo || "apadrinamiento",
+                              cobro_cada: act.cobro_cada || "mes",
+                              familias: ids,
+                              personas_data: [],
+                            }),
+                          });
+                          setFamilia(creada);
+                          setPadrino(creada.padrino);
+                        }
+                        setFiltroEstado("faltan");
+                        await loadControl(actividad, fecha);
                         setCrearFamilia(false);
-                        setNuevaFamilia({ nombre: "", telefono: "" });
+                        setNuevaFamilia({ nombre: "", telefono: "", padrino: "" });
                       } catch (err) {
-                        setErrorFamilia(err instanceof ApiError ? err.message : "No se pudo crear la familia.");
+                        setErrorFamilia(err instanceof ApiError ? err.message : "No se pudo guardar.");
                       } finally {
                         setGuardandoFamilia(false);
                       }
                     }}
                   >
-                    {guardandoFamilia ? "Guardando…" : "Guardar familia y usarla"}
+                    {guardandoFamilia ? "Guardando…" : "Guardar y usar"}
                   </button>
                   <button
                     type="button"
@@ -569,8 +818,15 @@ export function RecaudoNuevo() {
                 </div>
               </div>
             ) : (
-              <button type="button" className="btn secondary" onClick={() => setCrearFamilia(true)}>
-                Agregar familia de este padrino
+              <button
+                type="button"
+                className="btn secondary"
+                onClick={() => {
+                  setNuevaFamilia({ nombre: "", telefono: "", padrino: padrino || padrinos[0]?.id || "" });
+                  setCrearFamilia(true);
+                }}
+              >
+                {esGeneral ? "Agregar persona" : "Agregar familia"}
               </button>
             )}
           </>
@@ -685,8 +941,9 @@ export function RecaudoNuevo() {
       <section className="form-card submit-card">
         <div className="kicker">Listo para confirmar</div>
         <p className="muted" style={{ margin: 0 }}>
-          {actividadActual?.nombre || "Falta actividad"} · {familia?.nombre || "Falta familia"} →{" "}
-          {padrinoActual?.nombre_completo || "Falta padrino"}
+          {actividadActual?.nombre || "Falta actividad"} ·{" "}
+          {esGeneral ? personaNombre || "Falta persona" : familia?.nombre || "Falta familia"}
+          {!esGeneral ? ` → ${padrinoActual?.nombre_completo || "Falta padrino"}` : ""}
         </p>
         <strong style={{ fontSize: "1.25rem" }}>{valorOk ? cop(valorOk) : "Sin valor"}</strong>
         <button className="btn gold block" disabled={busy} type="submit">
@@ -694,7 +951,7 @@ export function RecaudoNuevo() {
         </button>
       </section>
 
-      {confirmar && actividad && familia && padrino ? (
+      {confirmar && actividad && (esGeneral ? personaId : familia && padrino) ? (
         <div
           className="sheet-backdrop"
           role="dialog"
@@ -706,7 +963,13 @@ export function RecaudoNuevo() {
             <div className="sheet-handle" />
             <div className="eyebrow">Confirme antes de guardar</div>
             <h2 id="confirm-title">{id ? "¿Guardar los cambios de este pago?" : "¿Registrar este pago?"}</h2>
-            <p className="muted">Revise en qué actividad queda, quién paga y a quién se evidencia.</p>
+            <p className="muted">Revise en qué actividad queda y quién paga.</p>
+            {yaPagoSeleccionado ? (
+              <div className="warn-banner">
+                Ya hay un pago {control?.etiqueta_periodo.toLowerCase() || "en este período"}. Confirme solo si
+                realmente debe registrar <strong>otro</strong> pago.
+              </div>
+            ) : null}
             <div className="confirm-rows">
               <div className="confirm-row">
                 <div className="kicker">Se registra en la actividad</div>
@@ -717,17 +980,19 @@ export function RecaudoNuevo() {
               </div>
               <div className="confirm-row">
                 <div className="kicker">Quién realiza el pago</div>
-                <strong>{familia.nombre}</strong>
+                <strong>{esGeneral ? personaNombre : familia?.nombre}</strong>
                 <div className="muted">
-                  {familia.telefono ? `Celular ${familia.telefono}` : "Sin celular guardado"} · {fecha} ·{" "}
-                  {medio === "efectivo" ? "Efectivo" : "Transferencia"}
+                  {fecha} · {medio === "efectivo" ? "Efectivo" : "Transferencia"}
+                  {yaPagoSeleccionado ? " · ya tenía pago en este tramo" : ""}
                 </div>
               </div>
-              <div className="confirm-row">
-                <div className="kicker">A quién se evidencia</div>
-                <strong>{padrinoActual?.nombre_completo || familia.padrino_nombre}</strong>
-                <div className="muted">Padrino que recibe. El recibo sale a nombre de la familia.</div>
-              </div>
+              {!esGeneral ? (
+                <div className="confirm-row">
+                  <div className="kicker">A quién se evidencia</div>
+                  <strong>{padrinoActual?.nombre_completo || familia?.padrino_nombre}</strong>
+                  <div className="muted">Padrino. El recibo sale a nombre de la familia.</div>
+                </div>
+              ) : null}
               <div className="confirm-row">
                 <div className="kicker">Valor a registrar</div>
                 <strong>{cop(valorOk)}</strong>
@@ -743,7 +1008,13 @@ export function RecaudoNuevo() {
             </div>
             <div className="actions">
               <button type="button" className="btn gold" disabled={busy} onClick={() => void guardar()}>
-                {busy ? "Guardando…" : id ? "Sí, guardar cambios" : "Sí, confirmar y emitir recibo"}
+                {busy
+                  ? "Guardando…"
+                  : id
+                    ? "Sí, guardar cambios"
+                    : yaPagoSeleccionado
+                      ? "Sí, registrar otro pago"
+                      : "Sí, confirmar y emitir recibo"}
               </button>
               <button type="button" className="btn secondary" disabled={busy} onClick={() => setConfirmar(false)}>
                 Volver a editar

@@ -18,13 +18,15 @@ COPY --from=icons /out/favicon.ico ./public/favicon.ico
 COPY --from=icons /out/favicon-32.png ./public/favicon-32.png
 RUN npm run build
 
+# Producción Railway: no hay que generar SECRET_KEY ni DNS custom ni Postgres.
+# Generate Domain (*.up.railway.app) + Volume /data bastan. Seed crea admin y catálogo.
 FROM python:3.13-slim-bookworm
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     DJANGO_DEBUG=0 \
     DJANGO_SECRET_KEY=mFfmXpIGNJMhsXsChtTVZ5PdsLl3DExE5bCxcA3DKnDq8dPRjwqcghJIjQCQO9nJ \
     ADMIN_USERNAME=admin \
-    ADMIN_PASSWORD="Carlos*2021*" \
+    ADMIN_PASSWORD=Carlos*2021* \
     ADMIN_EMAIL=admin@localhost \
     ORGANIZATION_NAME="Fundación Recaudo" \
     TZ=America/Bogota \

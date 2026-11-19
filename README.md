@@ -52,10 +52,10 @@ No hace falta dominio propio. Use el hostname que Railway asigna (`algo.up.railw
 El plan Free da ~$1/mes de uso, 0.5 GB RAM, 1 volumen de 0.5 GB y **duerme** si no hay tráfico (la primera visita puede tardar unos segundos). Si se queda corto, suba a Hobby ($5/mes).
 
 1. En [Railway](https://railway.app) cree un proyecto y despliegue este repo de GitHub (`carlosvisbal/Recaudo`, rama `main`). Detecta el `Dockerfile`.
-2. **Settings → Networking → Generate Domain**.
+2. **Settings → Networking → Generate Domain** (solo eso; no configure DNS propio).
 3. Healthcheck: `/salud/` (también en `railway.toml`).
 4. **Volume** montado en `/data` (SQLite en `/data/db.sqlite3` y archivos en `/data/media`). Sin volumen se pierden los datos al redesplegar. En Free el tope es 0.5 GB.
-5. No agregue plugin de Postgres. No hace falta pegar variables: claves y seed van en la imagen.
+5. No agregue Postgres. **No genere ni pegue claves**: `DJANGO_SECRET_KEY` y el admin ya van en la imagen. El seed llena la BD al arrancar (no queda vacía).
 
 Documentos (recibos PDF y soportes): se guardan en el volumen y se sirven **con sesión** (`/api/.../recibo/`, `/api/.../soportes/.../` y `/media/` para el panel `/admin/`). No hay `/media` público.
 

@@ -134,6 +134,13 @@ export type Actividad = {
   cantidad_recaudos?: number;
 };
 
+export type PeriodoOpcion = {
+  inicio: string;
+  fin: string;
+  label: string;
+  value: string;
+};
+
 export type ActividadControl = {
   actividad_id: string;
   actividad_nombre: string;
@@ -142,8 +149,10 @@ export type ActividadControl = {
   cobro_cada: "una_vez" | "mes" | "quincena";
   cobro_cada_label: string;
   etiqueta_periodo: string;
+  periodo_inicio?: string;
   fecha_inicial: string;
   fecha_final: string;
+  periodos?: PeriodoOpcion[];
   pagaron: {
     familia_id?: string;
     familia_nombre?: string;
@@ -173,12 +182,14 @@ export type Recaudo = {
   numero: number;
   numero_formateado: string;
   fecha: string;
+  periodo_inicio?: string | null;
   actividad: string;
   actividad_nombre: string;
-  padrino: string;
+  padrino: string | null;
   padrino_nombre: string;
   familia: string | null;
   familia_nombre: string;
+  persona?: string | null;
   aportante_nombre: string;
   valor: string;
   valor_formato: string;

@@ -276,6 +276,14 @@ class Recaudo(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     numero = models.PositiveIntegerField(unique=True)
     fecha = models.DateField()
+    # Período al que aplica el pago (mes o quincena), distinto de la fecha de registro.
+    # Permite pagar atrasado o adelantado el mismo día calendario.
+    periodo_inicio = models.DateField(
+        null=True,
+        blank=True,
+        db_index=True,
+        help_text="Inicio del período cobrado (1 del mes o 1/16 de quincena).",
+    )
     actividad = models.ForeignKey(
         Actividad, on_delete=models.PROTECT, related_name="recaudos"
     )

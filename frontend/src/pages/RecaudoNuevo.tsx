@@ -73,6 +73,7 @@ export function RecaudoNuevo() {
   const [qFamilia, setQFamilia] = useState("");
   const [filtroEstado, setFiltroEstado] = useState<"todas" | "faltan" | "pagaron">("faltan");
   const [fecha, setFecha] = useState(today());
+  const [periodoInicio, setPeriodoInicio] = useState(today());
   const [valor, setValor] = useState("");
   const [medio, setMedio] = useState<"efectivo" | "transferencia">("efectivo");
   const [concepto, setConcepto] = useState("");
@@ -99,7 +100,7 @@ export function RecaudoNuevo() {
     setPadrinos(parsePage<Padrino>(await api(`/api/padrinos/?${query}`)).results);
   }, []);
 
-  const loadControl = useCallback(async (actividadId: string, fechaRef = fecha) => {
+  const loadControl = useCallback(async (actividadId: string, periodoRef = periodoInicio) => {
     if (!actividadId) {
       setControl(null);
       return;
@@ -107,15 +108,24 @@ export function RecaudoNuevo() {
     setCargandoControl(true);
     try {
       const query = new URLSearchParams();
-      if (fechaRef) query.set("fecha", fechaRef);
+      if (periodoRef) query.set("periodo_inicio", periodoRef);
       const data = await api<ActividadControl>(`/api/actividades/${actividadId}/control/?${query}`);
       setControl(data);
+      const opciones = data.periodos || [];
+      if (opciones.length) {
+        const existe = opciones.some((p) => p.value === periodoRef);
+        if (!existe && data.periodo_inicio) {
+          setPeriodoInicio(data.periodo_inicio);
+        }
+      } else if (data.periodo_inicio && data.periodo_inicio !== periodoRef) {
+        setPeriodoInicio(data.periodo_inicio);
+      }
     } catch {
       setControl(null);
     } finally {
       setCargandoControl(false);
     }
-  }, [fecha]);
+  }, [periodoInicio]);
 
   useEffect(() => {
     void loadActividades();
@@ -126,8 +136,9 @@ export function RecaudoNuevo() {
     if (!id) return;
     void api<Recaudo>(`/api/recaudos/${id}/`).then((item) => {
       setActividad(item.actividad);
-      setPadrino(item.padrino);
+      setPadrino(item.padrino || "");
       setFecha(item.fecha);
+      setPeriodoInicio(item.periodo_inicio || item.fecha);
       setValor(String(Number(item.valor)));
       setMedio(item.medio_pago);
       setConcepto(item.concepto || "");
@@ -177,8 +188,8 @@ export function RecaudoNuevo() {
       setControl(null);
       return;
     }
-    void loadControl(actividad, fecha);
-  }, [actividad, fecha, loadControl]);
+    void loadControl(actividad, periodoInicio);
+  }, [actividad, periodoInicio, loadControl]);
 
   const valorOk = useMemo(() => parseValor(valor), [valor]);
   const actividadActual =
@@ -335,6 +346,7 @@ export function RecaudoNuevo() {
     try {
       const body = new FormData();
       body.append("fecha", fecha);
+      if (periodoInicio) body.append("periodo_inicio", periodoInicio);
       body.append("actividad", actividad);
       body.append("valor", valorOk);
       body.append("medio_pago", medio);
@@ -544,7 +556,7 @@ export function RecaudoNuevo() {
             <h2>¿Quién paga?</h2>
             <p className="muted">
               {control
-                ? `${control.etiqueta_periodo}. Toque ${esGeneral ? "la persona" : "la familia"}. Quien ya pagó se marca.`
+                ? `Viendo: ${control.etiqueta_periodo}. Toque ${esGeneral ? "la persona" : "la familia"}. Puede registrar varios pagos del mismo mes o de meses atrasados/adelantados.`
                 : "Primero elija la actividad."}
             </p>
           </div>
@@ -552,7 +564,32 @@ export function RecaudoNuevo() {
 
         {!actividad ? (
           <p className="muted">Elija la actividad arriba para ver quiénes faltan por pagar.</p>
-        ) : cargandoControl ? (
+        ) : (
+          <>
+            {control?.cobro_cada && control.cobro_cada !== "una_vez" && (control.periodos?.length || 0) > 0 ? (
+              <label>
+                Este pago corresponde a
+                <select
+                  value={periodoInicio}
+                  onChange={(e) => {
+                    setPeriodoInicio(e.target.value);
+                    setFiltroEstado("faltan");
+                  }}
+                >
+                  {(control.periodos || []).map((p) => (
+                    <option key={p.value} value={p.value}>
+                      {p.label}
+                    </option>
+                  ))}
+                </select>
+                <span className="muted" style={{ display: "block", marginTop: 6 }}>
+                  Ejemplo: hoy puede registrar el de septiembre y también el de noviembre o diciembre. Si ya hay uno
+                  de ese mes, puede guardar otro adicional.
+                </span>
+              </label>
+            ) : null}
+
+        {cargandoControl ? (
           <p className="muted">Cargando participantes…</p>
         ) : (
           <>
@@ -618,9 +655,9 @@ export function RecaudoNuevo() {
 
             {yaPagoSeleccionado ? (
               <div className="warn-banner">
-                <strong>{esGeneral ? personaNombre : familia?.nombre}</strong> ya pagó{" "}
-                {control?.etiqueta_periodo.toLowerCase() || "en este período"}. Si continúa, se registrará{" "}
-                <strong>otro pago</strong> (posible duplicado).
+                <strong>{esGeneral ? personaNombre : familia?.nombre}</strong> ya tiene pago de{" "}
+                {control?.etiqueta_periodo || "este período"}. Puede guardar <strong>otro pago adicional</strong> del
+                mismo período si lo necesita.
               </div>
             ) : null}
 
@@ -793,7 +830,7 @@ export function RecaudoNuevo() {
                           setPadrino(creada.padrino);
                         }
                         setFiltroEstado("faltan");
-                        await loadControl(actividad, fecha);
+                        await loadControl(actividad, periodoInicio);
                         setCrearFamilia(false);
                         setNuevaFamilia({ nombre: "", telefono: "", padrino: "" });
                       } catch (err) {
@@ -831,6 +868,8 @@ export function RecaudoNuevo() {
             )}
           </>
         )}
+          </>
+        )}
       </section>
 
       <section className="form-card">
@@ -855,7 +894,7 @@ export function RecaudoNuevo() {
             />
           </label>
           <label>
-            Fecha
+            Fecha en que recibió el dinero
             <input type="date" value={fecha} onChange={(e) => setFecha(e.target.value)} required />
           </label>
           <div className="span-2">
@@ -966,8 +1005,8 @@ export function RecaudoNuevo() {
             <p className="muted">Revise en qué actividad queda y quién paga.</p>
             {yaPagoSeleccionado ? (
               <div className="warn-banner">
-                Ya hay un pago {control?.etiqueta_periodo.toLowerCase() || "en este período"}. Confirme solo si
-                realmente debe registrar <strong>otro</strong> pago.
+                Ya hay un pago de {control?.etiqueta_periodo || "este período"}. Si confirma, se guarda un{" "}
+                <strong>pago adicional</strong> del mismo período (está permitido).
               </div>
             ) : null}
             <div className="confirm-rows">
@@ -1013,7 +1052,7 @@ export function RecaudoNuevo() {
                   : id
                     ? "Sí, guardar cambios"
                     : yaPagoSeleccionado
-                      ? "Sí, registrar otro pago"
+                      ? "Sí, registrar pago adicional"
                       : "Sí, confirmar y emitir recibo"}
               </button>
               <button type="button" className="btn secondary" disabled={busy} onClick={() => setConfirmar(false)}>

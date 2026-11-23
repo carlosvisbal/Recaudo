@@ -272,6 +272,7 @@ class RecaudoListSerializer(serializers.ModelSerializer):
             "numero",
             "numero_formateado",
             "fecha",
+            "periodo_inicio",
             "actividad",
             "actividad_nombre",
             "padrino",
@@ -333,6 +334,11 @@ class RecaudoDetalleSerializer(RecaudoListSerializer):
 
 class RecaudoCreateSerializer(serializers.Serializer):
     fecha = serializers.DateField(required=False)
+    periodo_inicio = serializers.DateField(
+        required=False,
+        allow_null=True,
+        help_text="Período cobrado (mes o quincena). Puede ser atrasado o adelantado.",
+    )
     actividad = serializers.PrimaryKeyRelatedField(queryset=Actividad.objects.all())
     padrino = serializers.PrimaryKeyRelatedField(
         queryset=Padrino.objects.all(), required=False, allow_null=True

@@ -38,7 +38,13 @@ from .models import (
 )
 from .money import format_cop, money, numero_a_letras
 from .pdf import generar_pdf_recibo
-from .periodos import etiqueta_cobro, rango_cobro
+from .periodos import (
+    etiqueta_cobro,
+    etiqueta_periodo_clave,
+    inicio_periodo,
+    listar_periodos,
+    rango_cobro,
+)
 
 
 def siguiente_numero_recibo() -> int:
@@ -207,23 +213,60 @@ def _asegurar_participante(actividad: Actividad, familia: Familia) -> None:
     )
 
 
+def _resolver_periodo_inicio(actividad: Actividad, data: dict) -> date:
+    """
+    Período al que aplica el pago.
+    - Si viene periodo_inicio, se normaliza al inicio del tramo.
+    - Si no, se deriva de la fecha de registro (compatibilidad).
+    """
+    cobro = actividad.cobro_cada or CobroCada.MES
+    raw = data.get("periodo_inicio")
+    if raw:
+        if isinstance(raw, str):
+            raw = date.fromisoformat(str(raw)[:10])
+        if cobro == CobroCada.UNA_VEZ:
+            return actividad.fecha_inicio
+        return inicio_periodo(cobro, raw)
+    fecha_pago = data.get("fecha") or date.today()
+    if cobro == CobroCada.UNA_VEZ:
+        return actividad.fecha_inicio
+    return inicio_periodo(cobro, fecha_pago)
+
+
 def ya_pago_en_periodo(
     actividad: Actividad,
     *,
     familia: Familia | None = None,
     persona: ActividadPersona | None = None,
+    periodo_inicio: date | None = None,
     fecha: date | None = None,
     exclude_recaudo_id=None,
 ) -> Recaudo | None:
-    """Devuelve el pago confirmado del mismo tramo, si existe."""
-    ref = fecha or date.today()
-    inicio, fin = _rango_actividad(actividad, ref)
+    """Devuelve el pago confirmado del mismo período cobrado, si existe."""
+    cobro = actividad.cobro_cada or CobroCada.MES
+    if periodo_inicio is None:
+        periodo_inicio = _resolver_periodo_inicio(
+            actividad, {"fecha": fecha or date.today()}
+        )
+    else:
+        if cobro != CobroCada.UNA_VEZ:
+            periodo_inicio = inicio_periodo(cobro, periodo_inicio)
+
     qs = Recaudo.objects.filter(
         actividad=actividad,
         estado=EstadoRecaudo.CONFIRMADO,
-        fecha__gte=inicio,
-        fecha__lte=fin,
+        periodo_inicio=periodo_inicio,
     ).order_by("-numero")
+    # Compatibilidad: pagos antiguos sin periodo_inicio (solo si aún quedan null)
+    if not qs.exists():
+        inicio, fin = _rango_actividad(actividad, periodo_inicio)
+        qs = Recaudo.objects.filter(
+            actividad=actividad,
+            estado=EstadoRecaudo.CONFIRMADO,
+            periodo_inicio__isnull=True,
+            fecha__gte=inicio,
+            fecha__lte=fin,
+        ).order_by("-numero")
     if familia:
         qs = qs.filter(familia=familia)
     elif persona:
@@ -297,14 +340,14 @@ def _validar_datos_pago(
     if len(archivos) > settings.MAX_SOPORTES_POR_RECAUDO:
         raise ValidationError("Puede adjuntar como máximo 8 soportes.")
 
-    fecha_pago = data.get("fecha") or date.today()
+    periodo = _resolver_periodo_inicio(actividad, data)
     aviso_duplicado = None
     if familia:
         _asegurar_participante(actividad, familia)
         previo = ya_pago_en_periodo(
             actividad,
             familia=familia,
-            fecha=fecha_pago,
+            periodo_inicio=periodo,
             exclude_recaudo_id=exclude_recaudo_id,
         )
         nombre = familia.nombre
@@ -312,7 +355,7 @@ def _validar_datos_pago(
         previo = ya_pago_en_periodo(
             actividad,
             persona=persona,
-            fecha=fecha_pago,
+            periodo_inicio=periodo,
             exclude_recaudo_id=exclude_recaudo_id,
         )
         nombre = persona.nombre
@@ -321,16 +364,13 @@ def _validar_datos_pago(
         nombre = aportante
 
     if previo:
-        if actividad.cobro_cada == CobroCada.UNA_VEZ:
-            etiqueta = "esta actividad (un solo pago)"
-        elif actividad.cobro_cada == CobroCada.QUINCENA:
-            etiqueta = "esta quincena"
-        else:
-            etiqueta = "este mes"
+        etiqueta = etiqueta_periodo_clave(
+            actividad.cobro_cada or CobroCada.MES, periodo
+        )
         aviso_duplicado = (
-            f"{nombre} ya tiene un pago en {etiqueta} "
+            f"{nombre} ya tiene un pago de {etiqueta} "
             f"(recibo {previo.numero_formateado} por {format_cop(previo.valor)}). "
-            "Si continúa, se registrará otro pago."
+            "Si continúa, se registrará un pago adicional de ese mismo período."
         )
 
     return {
@@ -338,6 +378,7 @@ def _validar_datos_pago(
         "padrino": padrino,
         "familia": familia,
         "persona": persona,
+        "periodo_inicio": periodo,
         "valor": valor,
         "medio": medio,
         "aportante": aportante,
@@ -452,10 +493,38 @@ def sincronizar_personas(actividad: Actividad, personas: list) -> None:
     ActividadPersona.objects.filter(actividad=actividad).exclude(id__in=keep_ids).delete()
 
 
+def _ids_pagaron_periodo(actividad: Actividad, inicio: date, *, por: str) -> set:
+    """IDs de familia o persona que ya tienen pago del período (periodo_inicio)."""
+    field = "familia_id" if por == "familia" else "persona_id"
+    qs = Recaudo.objects.filter(
+        actividad=actividad,
+        estado=EstadoRecaudo.CONFIRMADO,
+        **{f"{field}__isnull": False},
+        periodo_inicio=inicio,
+    )
+    ids = set(qs.values_list(field, flat=True))
+    # Compatibilidad con recaudos antiguos sin periodo_inicio
+    fin = _rango_actividad(actividad, inicio)[1]
+    legacy = Recaudo.objects.filter(
+        actividad=actividad,
+        estado=EstadoRecaudo.CONFIRMADO,
+        periodo_inicio__isnull=True,
+        fecha__gte=inicio,
+        fecha__lte=fin,
+        **{f"{field}__isnull": False},
+    ).values_list(field, flat=True)
+    ids.update(legacy)
+    return ids
+
+
 def control_actividad(actividad: Actividad, *, ref: date | None = None) -> dict:
-    """Listas Pagaron / Faltan del tramo (un solo pago, mes o quincena)."""
+    """Listas Pagaron / Faltan del período cobrado (no de la fecha de registro)."""
     ref = ref or date.today()
     inicio, fin = _rango_actividad(actividad, ref)
+    # Normalizar a la clave del período
+    if actividad.cobro_cada != CobroCada.UNA_VEZ:
+        inicio = inicio_periodo(actividad.cobro_cada or CobroCada.MES, ref)
+        fin = _rango_actividad(actividad, inicio)[1]
     base = {
         "actividad_id": str(actividad.id),
         "actividad_nombre": actividad.nombre,
@@ -463,21 +532,21 @@ def control_actividad(actividad: Actividad, *, ref: date | None = None) -> dict:
         "tipo_label": actividad.get_tipo_display(),
         "cobro_cada": actividad.cobro_cada,
         "cobro_cada_label": actividad.get_cobro_cada_display(),
-        "etiqueta_periodo": _etiqueta_periodo_actividad(actividad, ref),
+        "etiqueta_periodo": _etiqueta_periodo_actividad(actividad, inicio),
+        "periodo_inicio": inicio.isoformat(),
         "fecha_inicial": inicio.isoformat(),
         "fecha_final": fin.isoformat(),
+        "periodos": listar_periodos(
+            actividad.cobro_cada or CobroCada.MES,
+            desde=actividad.fecha_inicio,
+            hasta=actividad.fecha_fin,
+            alrededor=ref,
+        ),
     }
 
     if actividad.tipo == TipoActividad.GENERAL:
         personas = list(actividad.personas.all().order_by("nombre"))
-        pagos = Recaudo.objects.filter(
-            actividad=actividad,
-            estado=EstadoRecaudo.CONFIRMADO,
-            persona_id__isnull=False,
-            fecha__gte=inicio,
-            fecha__lte=fin,
-        ).values_list("persona_id", flat=True)
-        pagaron_ids = set(pagos)
+        pagaron_ids = _ids_pagaron_periodo(actividad, inicio, por="persona")
         pagaron = []
         faltan = []
         for persona in personas:
@@ -505,14 +574,7 @@ def control_actividad(actividad: Actividad, *, ref: date | None = None) -> dict:
         .select_related("familia", "padrino")
         .order_by("padrino__nombre_completo", "familia__nombre")
     )
-    pagos = Recaudo.objects.filter(
-        actividad=actividad,
-        estado=EstadoRecaudo.CONFIRMADO,
-        familia_id__isnull=False,
-        fecha__gte=inicio,
-        fecha__lte=fin,
-    ).values_list("familia_id", flat=True)
-    pagaron_ids = set(pagos)
+    pagaron_ids = _ids_pagaron_periodo(actividad, inicio, por="familia")
 
     pagaron = []
     faltan = []
@@ -551,6 +613,7 @@ def actualizar_recaudo(*, recaudo: Recaudo, usuario, data: dict, archivos: list,
         exclude_recaudo_id=recaudo.id,
     )
     recaudo.fecha = data.get("fecha") or recaudo.fecha
+    recaudo.periodo_inicio = parsed["periodo_inicio"]
     recaudo.actividad = parsed["actividad"]
     recaudo.padrino = parsed["padrino"]
     recaudo.familia = parsed["familia"]
@@ -594,6 +657,7 @@ def confirmar_recaudo(*, usuario, data: dict, archivos: list, request=None) -> R
     recaudo = Recaudo.objects.create(
         numero=numero,
         fecha=data.get("fecha") or date.today(),
+        periodo_inicio=parsed["periodo_inicio"],
         actividad=parsed["actividad"],
         padrino=parsed["padrino"],
         familia=parsed["familia"],
@@ -865,30 +929,55 @@ def _cruzado_y_pendientes(params, qs, *, paginar=True):
     ):
         money_map[(row["padrino_id"], row["actividad_id"])] = row
 
-    # Pagos del tramo: agrupar por mismo rango → pocas queries, no N+1
+    # Pagos del período cobrado (periodo_inicio), no de la fecha de registro
     paid_pairs = set()
     paid_personas = set()
-    rangos: dict[tuple[date, date], list] = defaultdict(list)
+    claves: dict[date, list] = defaultdict(list)
     for actividad in actividades:
-        inicio, fin = _rango_actividad(actividad, ref)
-        rangos[(inicio, fin)].append(actividad.id)
-    for (inicio, fin), ids in rangos.items():
+        if actividad.cobro_cada == CobroCada.UNA_VEZ:
+            clave = actividad.fecha_inicio
+        else:
+            clave = inicio_periodo(actividad.cobro_cada or CobroCada.MES, ref)
+        claves[clave].append(actividad.id)
+    for clave, ids in claves.items():
         for fam_id, act_id in Recaudo.objects.filter(
             estado=EstadoRecaudo.CONFIRMADO,
             familia_id__isnull=False,
             actividad_id__in=ids,
-            fecha__gte=inicio,
-            fecha__lte=fin,
+            periodo_inicio=clave,
         ).values_list("familia_id", "actividad_id"):
             paid_pairs.add((fam_id, act_id))
         for persona_id, act_id in Recaudo.objects.filter(
             estado=EstadoRecaudo.CONFIRMADO,
             persona_id__isnull=False,
             actividad_id__in=ids,
-            fecha__gte=inicio,
-            fecha__lte=fin,
+            periodo_inicio=clave,
         ).values_list("persona_id", "actividad_id"):
             paid_personas.add((persona_id, act_id))
+        # Compatibilidad: recaudos antiguos sin periodo_inicio
+        for act_id in ids:
+            act = act_by_id.get(act_id)
+            if not act:
+                continue
+            inicio, fin = _rango_actividad(act, clave)
+            for fam_id in Recaudo.objects.filter(
+                estado=EstadoRecaudo.CONFIRMADO,
+                familia_id__isnull=False,
+                actividad_id=act_id,
+                periodo_inicio__isnull=True,
+                fecha__gte=inicio,
+                fecha__lte=fin,
+            ).values_list("familia_id", flat=True):
+                paid_pairs.add((fam_id, act_id))
+            for persona_id in Recaudo.objects.filter(
+                estado=EstadoRecaudo.CONFIRMADO,
+                persona_id__isnull=False,
+                actividad_id=act_id,
+                periodo_inicio__isnull=True,
+                fecha__gte=inicio,
+                fecha__lte=fin,
+            ).values_list("persona_id", flat=True):
+                paid_personas.add((persona_id, act_id))
 
     pagaron_ahora = defaultdict(set)
     pendientes_list = []

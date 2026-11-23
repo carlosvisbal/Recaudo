@@ -305,7 +305,7 @@ class ActividadViewSet(viewsets.ModelViewSet):
     def control(self, request, pk=None):
         actividad = self.get_object()
         ref = None
-        raw = request.query_params.get("fecha")
+        raw = request.query_params.get("periodo_inicio") or request.query_params.get("fecha")
         if raw:
             from datetime import date as date_cls
 

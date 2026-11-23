@@ -676,6 +676,69 @@ def test_control_marca_ya_pago_para_evitar_duplicado(api, catalogo):
     assert body["pagaron"][0]["familia_id"] == str(catalogo["familia"].id)
 
 
+def test_pagos_atrasados_adelantados_y_adicionales_mismo_periodo(api, catalogo):
+    """En noviembre puede pagar septiembre y noviembre, y también un adicional de diciembre."""
+    from operacion.models import ActividadParticipante, Recaudo
+
+    ActividadParticipante.objects.create(
+        actividad=catalogo["actividad"],
+        familia=catalogo["familia"],
+        padrino=catalogo["padrino"],
+    )
+    catalogo["actividad"].cobro_cada = "mes"
+    catalogo["actividad"].save(update_fields=["cobro_cada"])
+
+    base = {
+        "actividad": str(catalogo["actividad"].id),
+        "padrino": str(catalogo["padrino"].id),
+        "familia": str(catalogo["familia"].id),
+        "medio_pago": "efectivo",
+        "fecha": "2026-11-18",  # día de registro (noviembre)
+    }
+    sept = api.post(
+        "/api/recaudos/",
+        {**base, "valor": "10000", "periodo_inicio": "2026-09-01"},
+        format="multipart",
+    )
+    assert sept.status_code == 201, sept.content
+    assert sept.json()["periodo_inicio"] == "2026-09-01"
+
+    nov = api.post(
+        "/api/recaudos/",
+        {**base, "valor": "12000", "periodo_inicio": "2026-11-01"},
+        format="multipart",
+    )
+    assert nov.status_code == 201, nov.content
+
+    # Dos pagos del mismo diciembre (adicional permitido)
+    dic1 = api.post(
+        "/api/recaudos/",
+        {**base, "valor": "8000", "periodo_inicio": "2026-12-01"},
+        format="multipart",
+    )
+    dic2 = api.post(
+        "/api/recaudos/",
+        {**base, "valor": "5000", "periodo_inicio": "2026-12-01"},
+        format="multipart",
+    )
+    assert dic1.status_code == 201, dic1.content
+    assert dic2.status_code == 201, dic2.content
+    assert (
+        Recaudo.objects.filter(
+            familia=catalogo["familia"],
+            actividad=catalogo["actividad"],
+            periodo_inicio="2026-12-01",
+        ).count()
+        == 2
+    )
+
+    control_sept = api.get(
+        f"/api/actividades/{catalogo['actividad'].id}/control/",
+        {"periodo_inicio": "2026-09-01"},
+    )
+    assert control_sept.json()["cantidad_pagaron"] == 1
+
+
 def test_actividad_general_personas_un_solo_pago(api, catalogo):
     creada = api.post(
         "/api/actividades/",
